@@ -43,6 +43,9 @@ Asking the user:
 - Call ask_user, with options when you can, if the instruction is ambiguous, a login or CAPTCHA blocks a page, every fetch mode failed, or a choice would change the outcome. Do not guess when a wrong guess wastes many fetches.
 - You may fetch only sites the user named or that are already scraped. Fetching another site asks the user for approval automatically.
 
+Messages while you work:
+- The user may send new messages while you work. Treat the latest one as taking priority over earlier instructions: adapt your plan to it and keep what you have already gathered.
+
 Limits and safety:
 - Fetches are paced with a short delay. If a site answers 429 or "too many requests", times out, or starts blocking you, call set_fetch_delay with a longer delay (for example 3 to 10 seconds) before you retry. You cannot go below the user's minimum, so only raise it.
 - You have at most {max_steps} steps per round and {max_pages} page fetches. Be economical: use focus and selectors instead of reading whole pages.
@@ -165,6 +168,8 @@ class Session:
 
     def cancel(self) -> None:
         self._cancel.set()
+        if self.run is not None and self.run.status == "running":
+            self._stopped_drafts.extend(self._take_undelivered())  # Stop means stop: hand unread messages back
 
     def steer(self, text: str) -> SteerResult:
         """Queue a message for the live run to read before its next model call."""
@@ -401,6 +406,8 @@ class Session:
                 1000, int(window * self.cfg.context_fraction) - ctx.estimate_tokens(run.system_prompt) - self.cfg.reply_reserve
             ),
             on_grant=lambda reason, toolbox=self._toolbox, run=run: self._grant_pages(toolbox, run),
+            followups=self._undelivered,
+            on_inject=lambda followup, toolbox=self._toolbox: toolbox.allowed_hosts.update(h for h in hosts_in(followup["text"]) if h),
         )
         self._runner = AgentRunner(agent, max_steps=self.cfg.agent_max_steps, base_url=self.llm.base_url, provider=self.llm.name)
 
@@ -486,6 +493,7 @@ class Session:
             if self.run is None:
                 return
             await self.checkpointer.adelete_thread(self._thread_id())
+            self._stopped_drafts.extend(self._take_undelivered())
             self.run.status = "ended"
             self.run.pending = None
             self._save_run()
@@ -519,6 +527,12 @@ class Session:
                 elif event.kind == "rows_added":
                     run.rows_added += event.count
                     self._save_run()
+                elif event.kind == "followup":
+                    for followup in run.followups:
+                        if followup["id"] == event.id:
+                            followup["delivered"] = True
+                    run.allowed_hosts = sorted(toolbox.allowed_hosts)
+                    self._save_run()
                 elif event.kind == "needs_input":
                     run.status = "paused"
                     run.pending = event.payload
@@ -547,8 +561,9 @@ class Session:
         if terminal.kind == "done" and answer.strip():
             note = f"{run.rows_added} rows added to the results table" if run.rows_added else ""
             trace = tuple(TraceEntry(t["name"], t["args"], t["text"], t["ok"]) for t in run.trace)
+            asked = run.instruction + "".join(f"\n\nFollow-up: {f['text']}" for f in run.followups if f["delivered"])
             messages = [
-                Message("user", run.instruction),
+                Message("user", asked),
                 Message("assistant", answer, reasoning, sources, note=note, trace=trace),
             ]
             self.history.extend(messages)

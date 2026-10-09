@@ -766,3 +766,146 @@ def test_settings_without_a_store_fall_back_to_the_default():
     session = Session(CFG, FakeLLM(), make_fetch({}))
     session.set_setting("url", "x")
     assert session.setting("url", "dflt") == "dflt"
+
+
+def once(fn):
+    done = []
+
+    def wrapper(session):
+        if not done:
+            done.append(True)
+            fn(session)
+
+    return wrapper
+
+
+def steering_session(web, script, on_fetch, *, cfg=CFG, store=None, saver=None):
+    """A session whose first page fetch runs `on_fetch(session)`, like a user typing while the page loads."""
+    model = ScriptedChat(script=list(script))
+    holder = {}
+    inner = make_fetch(web)
+
+    def fetch(url, mode="fast", *, timeout=20.0):
+        on_fetch(holder["session"])
+        return inner(url, mode, timeout=timeout)
+
+    session = Session(cfg, FakeLLM(), fetch, store=store, checkpointer=saver, model_factory=lambda model_id: model)
+    holder["session"] = session
+    return session, model
+
+
+async def test_a_follow_up_sent_mid_run_reaches_the_next_model_call_and_joins_the_history_message():
+    web = {SITE_A: make_page(SITE_A)}
+    script = [ai("", call("fetch_page", "c1", url=SITE_A)), ai("Cheapest is Starter."), ai("Sure.")]
+    session, model = steering_session(web, script, once(lambda s: s.steer("only the cheapest plan")))
+    events = await run_all(session, f"Look at {SITE_A}")
+    assert events[-1].kind == "done"
+    assert [e.text for e in events if e.kind == "followup"] == ["only the cheapest plan"]
+    first, second = model.calls
+    assert all("only the cheapest plan" not in str(m.content) for m in first["messages"])
+    assert second["messages"][-1].content == "only the cheapest plan"
+    folded = f"Look at {SITE_A}\n\nFollow-up: only the cheapest plan"
+    assert [m.role for m in session.history] == ["user", "assistant"] and session.history[0].content == folded
+    assert session.run.followups[0]["delivered"] is True
+    await run_all(session, "anything else?")  # history still pairs up for the next turn
+    third = model.calls[2]["messages"]
+    assert [m.type for m in third] == ["system", "human", "ai", "human"] and third[1].content == folded
+
+
+async def test_a_follow_up_sent_while_the_final_answer_streams_is_answered_in_the_same_run():
+    session, model = agent_session({}, [ai("First answer."), ai("Second answer.")])
+    sent, events = False, []
+    async for event in session.run_agent("hello", "qwen-test"):
+        events.append(event)
+        if event.kind == "answer" and not sent:
+            sent = True
+            assert session.steer("one more thing").status == "queued"
+    assert events[-1].kind == "done" and len(model.calls) == 2
+    assert model.calls[1]["messages"][-1].content == "one more thing"
+    assert session.history[1].content.strip() == "Second answer."
+    assert session.history[0].content == "hello\n\nFollow-up: one more thing"
+
+
+async def test_a_follow_up_that_names_a_new_site_widens_the_allowlist_without_a_pause():
+    web = {SITE_A: make_page(SITE_A), OTHER: make_page(OTHER)}
+    script = [ai("", call("fetch_page", "c1", url=SITE_A)), ai("", call("fetch_page", "c2", url=OTHER)), ai("Both read.")]
+    session, _ = steering_session(web, script, once(lambda s: s.steer(f"also read {OTHER}")))
+    events = await run_all(session, f"Look at {SITE_A}")
+    assert not [e for e in events if e.kind == "needs_input"] and events[-1].kind == "done"
+    assert [p.url for p in session.pages] == [SITE_A, OTHER] and "other.test" in session.run.allowed_hosts
+
+
+async def test_a_follow_up_queued_during_a_limit_pause_is_delivered_when_the_run_resumes():
+    web = {SITE_A: make_page(SITE_A)}
+    cfg = Config(request_delay=0.0, agent_max_steps=1)
+    session, model = agent_session(web, [ai("", call("fetch_page", "c1", url=SITE_A)), ai("Short answer.")], cfg=cfg)
+    await run_all(session, f"Look at {SITE_A}")
+    assert session.pending["kind"] == "limit"
+    assert session.steer("keep it short").status == "queued"
+    resumed = await resume_all(session, {"action": "wrap_up"})
+    assert resumed[-1].kind == "done"
+    assert model.calls[1]["messages"][-1].content == "keep it short"
+    assert [e.text for e in resumed if e.kind == "followup"] == ["keep it short"]
+
+
+async def test_a_follow_up_is_not_injected_twice_when_the_delivered_flag_is_lost_in_a_crash(tmp_path):
+    web = {SITE_A: make_page(SITE_A)}
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        store = SessionStore(tmp_path / "session.db")
+        script = [ai("", call("fetch_page", "c1", url=SITE_A))]
+        session, _ = steering_session(web, script, once(lambda s: s.steer("also the SKU")), store=store, saver=saver)
+        stream = session.run_agent(f"read {SITE_A}", "qwen-test")
+        async for event in stream:
+            if event.kind == "followup":
+                break
+        await stream.aclose()
+        record = store.load_run()
+        record.followups[0]["delivered"] = False  # the app died before the flag was saved
+        store.save_run(record)
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        session, model = agent_session(web, [ai("finished")], store=SessionStore(tmp_path / "session.db"), saver=saver)
+        await session.restore()
+        events = await proceed_all(session)
+        assert events[-1].kind == "done"
+        assert [m.content for m in model.calls[0]["messages"]].count("also the SKU") == 1
+
+
+async def test_stop_hands_an_unread_follow_up_back_as_a_draft():
+    web = {SITE_A: make_page(SITE_A)}
+
+    def type_then_stop(session):
+        session.steer("never mind the footer")
+        session.cancel()
+
+    script = [ai("", call("fetch_page", "c1", url=SITE_A)), ai("unused")]
+    session, model = steering_session(web, script, once(type_then_stop))
+    events = await run_all(session, f"Look at {SITE_A}")
+    assert events[-1].kind == "limit" and events[-1].text == "stopped" and session.run.status == "stopped"
+    assert session.take_stopped_drafts() == ["never mind the footer"] and session.take_stopped_drafts() == []
+    assert session.run.followups == [] and len(model.calls) == 1
+    await proceed_all(session)  # let the graph finish, as the other stop test does, so nothing is left pending
+
+
+async def test_discarding_a_paused_run_hands_unread_follow_ups_back_as_drafts():
+    session = await paused_session()
+    session.steer("remember the footer")
+    await session.discard_run()
+    assert session.run.status == "ended" and session.take_stopped_drafts() == ["remember the footer"]
+
+
+async def test_a_follow_up_sent_as_the_run_ends_is_handed_back_as_a_leftover():
+    session, _ = agent_session({}, [ai("All done.")])
+    async for event in session.run_agent("hello", "qwen-test"):
+        if event.kind == "done":
+            assert session.steer("too late").status == "queued"  # the run is still "running" until it finishes up
+    assert session.run.status == "done"
+    assert session.take_leftovers() == ["too late"] and session.take_leftovers() == []
+    assert session.history[0].content == "hello"  # never read, so not part of that turn
+
+
+async def test_the_system_prompt_tells_the_agent_to_expect_new_messages():
+    session, model = agent_session({}, [ai("ok")])
+    await run_all(session, "hi")
+    assert "may send new messages while you work" in model.calls[0]["messages"][0].content
