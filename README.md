@@ -6,6 +6,7 @@ Give a model plain-English instructions about what to scrape. By default it is a
 
 - **Tell it what to scrape.** "Go to example.com, follow the pricing links, and collect every plan with its price." Say how, too: "use stealthy mode", "use the `.price` selector", "only the /products pages".
 - **It asks when it is stuck.** The agent pauses with a question when your instruction is ambiguous, a login or CAPTCHA blocks a page, or a choice changes the outcome. It also pauses when it hits its step, page or repeat limit (continue, wrap up, or stop) and before it fetches a site you did not name (allow or deny).
+- **Talk to it while it works.** Type a follow-up ("skip the blog pages", "also grab the SKU") and the agent reads it before its next step, keeping what it has gathered. Your message shows as waiting until it is read. Press Stop and anything unread goes back into the box.
 - **Nothing is lost.** The session (pages, results, chat) and any paused, stopped or crashed run are saved to disk. Reopen the app and press Resume, or answer the question that was waiting.
 - **Results you can use.** Collected rows appear in a table with CSV and JSON download.
 - **Still just chat.** With the Agent switch off you get the original behaviour: scrape a page with the URL bar and ask questions about it, no tools. Use this for models without tool calling.
@@ -42,6 +43,7 @@ uv run scrapling install
 | A hard site | "Fetch https://example.com/pricing in stealthy mode and tell me the cheapest plan." |
 | To be consulted | "Find the contact email for the support team. Ask me if there is more than one." |
 | A follow-up | "Which of those costs less than 50 dollars?" (it reuses the pages it already fetched) |
+| To change course mid-run | While it works, send: "Only the cheapest plan, please." |
 
 The agent may fetch only sites you named in the instruction, the URL bar seed, or pages already scraped. Anything else asks you first.
 
