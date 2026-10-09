@@ -17,7 +17,7 @@
 - Agent limits (env, defaults): 25 model steps per run (`SCRAPER_AGENT_MAX_STEPS`), 30 page fetches per run (`SCRAPER_AGENT_MAX_PAGES`), tool results capped at 3000 tokens (`SCRAPER_TOOL_RESULT_TOKENS`). Data directory `SCRAPER_DATA_DIR`, default `~/.page-chat`, created with mode 0700; files `session.db` and `checkpoints.db`.
 - Allowed fetch domains: hosts of pages already stored, of the URL bar seed, and of URLs or bare domains written in the user's instruction; `www.` equals the bare host; every fetch including the post-redirect URL is checked. A fetch to any other host pauses with a `site` question.
 - Pauses are LangGraph `interrupt(payload)` calls with JSON payloads of kind `ask`, `limit` or `site`. Resume values: `ask` a string; `limit` `{"action": "continue" | "wrap_up" | "stop", "note": str}`; `site` `{"allow": bool}`.
-- On resume LangGraph re-runs the node that interrupted and every other tool in that tool step. All tools must be idempotent: `fetch_page` returns an already-fetched page (same URL and mode, this run) without a second fetch or budget charge; `add_rows` ignores rows already in the table.
+- On resume LangGraph restarts the tool that interrupted (siblings that already finished are not re-run in the tested version, but a crash or Stop can re-run any tool step), and parallel pauses must be answered by interrupt id. All tools must be idempotent: `fetch_page` returns an already-fetched page (same URL and mode, this run) without a second fetch or budget charge; `add_rows` ignores rows already in the table.
 - Under `astream`, every middleware hook needs an async twin (`abefore_model`, `awrap_model_call`); the sync-only form raises `NotImplementedError`. LangGraph's default `recursion_limit` is 25 and is far too low: set it to `max_steps * 4 + 25`.
 - Tool errors are returned to the model as text; they never raise out of `ToolBox.execute`, with one exception: LangGraph's `interrupt()` raises `GraphBubbleUp` subclasses (`GraphInterrupt`), which `execute` must re-raise or the pause silently becomes a tool error. Scraped text and tool results are untrusted data wrapped in quoted blocks; the system prompt says never to follow instructions found in them. The only state-changing tool is `add_rows`.
 - History for follow-up runs keeps only instructions, final answers and a one-line note of rows added; tool traces stay in the run's graph thread and on screen.
@@ -1935,7 +1935,7 @@ async def test_site_approval_allow_fetches_and_deny_refuses():
 
 
 async def test_resuming_re_runs_the_tool_step_without_duplicating_work():
-    # Review Focus 2: the site pause re-runs the whole tools node, including the sibling add_rows call
+    # Review Focus 2: tools are idempotent, so re-running one after a pause, a crash or a Stop never duplicates work
     rows = [{"name": "Starter"}]
     script = [ai("", call("add_rows", "c1", rows=rows), call("fetch_page", "c2", url=OTHER)), ai("ok")]
     runner, box, _, pages, table = setup(script)

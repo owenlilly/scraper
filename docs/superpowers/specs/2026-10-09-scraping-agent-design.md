@@ -43,7 +43,9 @@ Success criteria:
 - The stock `ChatOpenAI` drops LM Studio's `delta.reasoning_content`. A subclass overriding `_convert_chunk_to_generation_chunk` to copy it into `message.additional_kwargs["reasoning_content"]` restores it (192 reasoning characters seen). It relies on a private method, so a test must fail loudly if a LangChain upgrade breaks it.
 - A tool that calls `interrupt(payload)` pauses the graph; with `AsyncSqliteSaver` the paused state survives process exit; a fresh process resumed with `Command(resume="Team")` and the run finished.
 - The live model invents argument values the schema does not list (`mode: "stealth"`); tools must normalise them.
-- On resume LangGraph re-runs the whole node that called `interrupt()`. Everything before the interrupt in that node, and every other tool in the same tool step, runs again. Tools must therefore be idempotent.
+- On resume LangGraph restarts the tool that called `interrupt()` from its beginning. In the tested version, sibling tools of the same step that had already finished are not re-run, but after a crash or Stop any tool step may run again, so every tool must stay idempotent.
+- Several tools in one step can pause at once (parallel tool calls). LangGraph then requires each answer to name its interrupt id; the UI asks the pending questions one at a time and sends each answer with its id. Resuming without ids errors and loops.
+- `create_agent` treats a reply made only of unparseable tool calls (invalid JSON arguments) as a final answer. A guard sends it back to the model up to twice with a correction before giving up with a clear, non-resumable error.
 
 ## Architecture
 
