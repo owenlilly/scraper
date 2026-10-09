@@ -34,7 +34,8 @@ openai, rank-bm25 0.2.2, markdownify 1.2.3.
 src/scraper/
   __main__.py     entry point: python -m scraper
   config.py       defaults + env overrides
-  app.py          NiceGUI UI and wiring (no business logic)
+  app.py          NiceGUI UI (no business logic)
+  session.py      UI-independent controller: scrape + ask flow, chat history
   fetch.py        Scrapling wrapper -> Page
   crawl.py        same-domain link following
   context.py      prompt context builder (full or BM25)
@@ -56,10 +57,18 @@ tests/
   window. Otherwise split pages into chunks by markdown heading, rank with BM25 against the
   question, and fill the budget. Token estimate is chars/4. Retrieval sits behind a small
   interface so embeddings can replace BM25 later (LM Studio already lists embedding models).
-- `llm.LMStudio`: `list_models()`, `context_length(model)` (reads `loaded_context_length`
-  from LM Studio's `/api/v0/models`, falling back to `DEFAULT_CONTEXT` of 16384), and
-  `stream_chat(model, messages)` yielding typed events (`reasoning`, `answer`, `error`).
-  Splits `<think>...</think>` output from the answer.
+- `llm.LMStudio`: `list_models() -> list[ModelInfo]` reads LM Studio's native
+  `/api/v0/models` (id, type, loaded state, `loaded_context_length`), keeps chat-capable
+  models (`llm`, `vlm`), and falls back to `/v1/models` if the native endpoint is missing.
+  `context_length(model)` returns the loaded context or the configured fallback (16384)
+  when the model is not loaded. `stream_chat(model, messages)` yields typed events
+  (`reasoning`, `answer`, `error`). LM Studio streams reasoning in a separate
+  `delta.reasoning_content` field (verified against the live server); inline
+  `<think>...</think>` tags are also split out for models that emit them.
+- `session.Session`: owns the pages, failed URLs, chat history, scrape progress and the
+  cancel flag. `scrape(...)` runs the blocking fetch/crawl in a worker thread and exposes
+  `progress` for the UI to poll. `ask(question, model)` builds context, trims history,
+  streams events and records the exchange. The UI only renders what the session reports.
 
 ### Layout
 
@@ -110,6 +119,8 @@ pytest, test-first per module. No live internet in tests.
 - `crawl`: depth limit, page cap, same-domain filter, dedupe, cancel, using a fake `fetch_fn`.
 - `context`: full-vs-retrieved switch at the budget boundary, BM25 ranking on a known corpus, heading chunking.
 - `llm`: fake OpenAI-compatible server for streaming, `<think>` splitting, unreachable server, context-length fallback.
+- `session`: scrape and ask flows with fake fetch and fake LLM; history trimming; interrupted-answer handling.
+- `app`: one NiceGUI `user`-fixture smoke test with a fake session.
 - Manual smoke test of the real GUI against the live LM Studio model before calling it done.
 
 ## Configuration
