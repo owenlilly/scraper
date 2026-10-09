@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 from contextlib import AsyncExitStack
 
@@ -626,3 +627,67 @@ async def test_a_new_session_clears_the_url_but_keeps_the_other_settings(user: U
     assert element_values(user, "url") == [""]
     assert store.get_pref("ui.url") == ""
     assert store.get_pref("ui.mode") == "dynamic"
+
+
+def gated_session(script, web, gate):
+    """A session whose page fetches wait on `gate`, so a test can type while the agent is mid-run."""
+    model = ScriptedChat(script=list(script))
+    inner = make_fetch(web)
+
+    def fetch(url, mode="fast", *, timeout=20.0):
+        gate.wait(10)
+        return inner(url, mode, timeout=timeout)
+
+    return Session(Config(request_delay=0.0), FakeLLM(), fetch, model_factory=lambda model_id: model), model
+
+
+async def test_a_follow_up_typed_while_the_agent_works_is_queued_then_delivered(user: User):
+    gate = threading.Event()
+    script = [ai("", call("fetch_page", "c1", url=SITE)), ai("Starter is the cheapest.")]
+    session, model = gated_session(script, {SITE: make_page(SITE)}, gate)
+    register_page(session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Look at {SITE}")
+    await user.should_see(marker="stop")  # the run is in flight, blocked on the page
+    await user.should_see(marker="send")  # Send stays available beside Stop
+    await send_instruction(user, "only the cheapest plan")
+    await user.should_see("Waiting for the agent to read this")
+    gate.set()
+    await user.should_see("Starter is the cheapest.")
+    await user.should_not_see("Waiting for the agent to read this")
+    assert session.history[0].content.endswith("Follow-up: only the cheapest plan")
+    assert model.calls[1]["messages"][-1].content == "only the cheapest plan"
+
+
+async def test_a_follow_up_typed_during_a_question_is_delivered_after_the_answer(user: User):
+    script = [ai("", call("ask_user", "c1", question="Which plan?", options=["Team"])), ai("Team it is.")]
+    session, model = agent_session({SITE: make_page(SITE)}, script)
+    register_page(session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Price at {SITE}")
+    await user.should_see("Which plan?")
+    await send_instruction(user, "be brief")
+    await user.should_see("Waiting for the agent to read this")
+    user.find(marker="option:Team").click()
+    await user.should_see("Team it is.")
+    assert model.calls[1]["messages"][-1].content == "be brief"
+
+
+async def test_stopping_hands_an_unread_follow_up_back_to_the_composer(user: User):
+    gate = threading.Event()
+    script = [ai("", call("fetch_page", "c1", url=SITE)), ai("unused")]
+    session, _ = gated_session(script, {SITE: make_page(SITE)}, gate)
+    register_page(session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Look at {SITE}")
+    await user.should_see(marker="stop")
+    await send_instruction(user, "never mind the footer")
+    await user.should_see("Waiting for the agent to read this")
+    user.find(marker="stop").click()
+    gate.set()
+    await user.should_see("Stopped")
+    assert next(iter(user.find(marker="question").elements)).value == "never mind the footer"
+    await user.should_not_see("Waiting for the agent to read this")

@@ -113,6 +113,9 @@ AGENT_CSS = """
 .pc-pause-card { border: 1px solid var(--pc-mark); background: rgba(230, 208, 74, 0.08); padding: 0.8rem 1rem; border-radius: 4px; width: 100%; }
 .pc-pause-question { font-family: var(--pc-serif); font-size: 1.05rem; margin-bottom: 0.6rem; }
 .pc-notice--info { border-left-color: var(--pc-blue); background: rgba(127, 166, 201, 0.12); }
+.pc-queued { padding: 0 1.25rem; max-width: 76ch; }
+.pc-chat .pc-queued-msg .q-message-text { background: transparent !important; border: 1px dashed var(--pc-blue); }
+.pc-queued-note { font-family: var(--pc-sans); font-size: 0.75rem; color: var(--pc-muted); }
 .pc-results { padding: 0.25rem 1.25rem; max-width: 76ch; }
 .pc-table { background: var(--pc-paper); max-height: 14rem; }
 .pc-left, .pc-right { height: calc(100vh - 8.6rem); flex-wrap: nowrap; }

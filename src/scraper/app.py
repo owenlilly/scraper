@@ -60,6 +60,7 @@ def build_ui(cfg: Config, session: Session) -> None:
     ui.dark_mode(True)
     models: dict[str, ModelInfo] = {}
     busy = {"scrape": False, "ask": False, "agent": False}
+    queued: dict = {}  # follow-up id -> its waiting bubble
     syncing = {"models": False}  # True while the app itself rewrites the model list
 
     saved_mode = session.setting("mode", "fast")
@@ -106,6 +107,7 @@ def build_ui(cfg: Config, session: Session) -> None:
         with split.after, ui.column().classes("pc-right w-full gap-0"):
             with ui.scroll_area().classes("w-full pc-chat-scroll") as chat_scroll:
                 chat_box = ui.column().classes("w-full gap-2 pc-chat")
+            queued_box = ui.column().classes("w-full pc-chat pc-queued")
             results_box = ui.column().classes("w-full pc-results")
             notice_box = ui.column().classes("w-full pc-notices")
             pause_box = ui.column().classes("w-full pc-pause")
@@ -139,12 +141,15 @@ def build_ui(cfg: Config, session: Session) -> None:
         cancel_btn.set_visibility(scraping and bool(follow.value))
         progress.set_visibility(scraping)
         ticker.active = scraping
-        send_btn.set_visibility(not running)
         stop_btn.set_visibility(running)
+        steering = agent_on and (running or paused) and bool(model_select.value)
         can_ask = bool(model_select.value) and (agent_on or bool(session.pages)) and not scraping and not asking and not paused
-        send_btn.set_enabled(can_ask)
-        question.set_enabled(not asking and not paused)
-        hint = "Tell the agent what to scrape, or ask about the pages" if agent_on else "Ask about this page"
+        send_btn.set_enabled(can_ask or steering)
+        question.set_enabled(steering or (not asking and not paused))
+        if steering:
+            hint = "Message the agent while it works"
+        else:
+            hint = "Tell the agent what to scrape, or ask about the pages" if agent_on else "Ask about this page"
         question.props(f'placeholder="{hint}"')
 
     def update_progress() -> None:
@@ -200,6 +205,19 @@ def build_ui(cfg: Config, session: Session) -> None:
     def waiting_run() -> bool:
         return session.run is not None and session.run.resumable
 
+    def add_queued(followup_id: str, text: str) -> None:
+        with queued_box:
+            with ui.chat_message(sent=True, name="You").classes("pc-queued-msg") as bubble:
+                ui.label(text)
+                ui.label("Waiting for the agent to read this").classes("pc-queued-note")
+        queued[followup_id] = bubble
+
+    def restore_drafts(drafts: list[str]) -> None:
+        if drafts:
+            question.set_value(" ".join([*drafts, (question.value or "").strip()]).strip())
+            queued_box.clear()
+            queued.clear()
+
     def render_history() -> None:
         turn_state["turn"] = None  # the chat is rebuilt, so any live bubble is gone
         chat_box.clear()
@@ -229,6 +247,15 @@ def build_ui(cfg: Config, session: Session) -> None:
                         ui.label("Based on " + ", ".join(message.sources)).classes("pc-cite")
             if waiting_run():
                 ui.chat_message(session.run.instruction, sent=True, name="You")  # the task a paused or interrupted run belongs to
+                for followup in session.run.followups:
+                    if followup["delivered"]:
+                        ui.chat_message(followup["text"], sent=True, name="You")
+        queued.clear()
+        queued_box.clear()
+        if waiting_run():
+            for followup in session.run.followups:
+                if not followup["delivered"]:
+                    add_queued(followup["id"], followup["text"])
         chat_scroll.scroll_to(percent=1.0)
 
     def refresh_results() -> None:
@@ -400,14 +427,14 @@ def build_ui(cfg: Config, session: Session) -> None:
 
     def new_turn() -> dict:
         with chat_box:
-            with ui.chat_message(name="Agent"):
+            with ui.chat_message(name="Agent") as bubble:
                 step_label = ui.label("Working...").classes("pc-step")
                 log_box = ui.column().classes("w-full gap-1 pc-log")
                 with ui.expansion("Reasoning", icon="psychology").classes("w-full pc-reasoning") as think_box:
                     think_md = ui.markdown()
                 answer_md = ui.markdown("Thinking...").classes("pc-waiting")
         think_box.set_visibility(False)
-        return {"step": step_label, "log": log_box, "think_box": think_box, "think": think_md, "answer": answer_md, "entries": deque(), "waiting": True}
+        return {"step": step_label, "log": log_box, "think_box": think_box, "think": think_md, "answer": answer_md, "entries": deque(), "waiting": True, "bubble": bubble, "fresh": False}
 
     async def consume(stream) -> dict:
         """Render one agent stream into an assistant bubble (a paused run keeps its bubble). Returns how it ended."""
@@ -416,6 +443,7 @@ def build_ui(cfg: Config, session: Session) -> None:
         turn_state["turn"] = turn
         turn["step"].set_text("Working...")
         reasoning = answer = ""
+        last_step = 0
 
         def stop_waiting() -> None:
             if turn["waiting"]:
@@ -426,7 +454,10 @@ def build_ui(cfg: Config, session: Session) -> None:
         try:
             async with aclosing(stream) as events:
                 async for event in events:
+                    if event.kind != "followup":
+                        turn["fresh"] = False
                     if event.kind == "step":
+                        last_step = event.step
                         reasoning = answer = ""
                         turn["think"].set_content("")
                         turn["think_box"].set_visibility(False)
@@ -434,6 +465,22 @@ def build_ui(cfg: Config, session: Session) -> None:
                         turn["answer"].classes(add="pc-waiting")
                         turn["waiting"] = True
                         turn["step"].set_text(f"Step {event.step}")
+                    elif event.kind == "followup":
+                        reasoning = answer = ""
+                        waiting_bubble = queued.pop(event.id, None)
+                        if waiting_bubble is not None:
+                            queued_box.remove(waiting_bubble)
+                        if turn["fresh"]:
+                            chat_box.remove(turn["bubble"])  # two messages read together share the next bubble
+                        else:
+                            stop_waiting()
+                            turn["step"].set_text("Continued below")
+                        with chat_box:
+                            ui.chat_message(event.text, sent=True, name="You")
+                        turn = new_turn()
+                        turn["fresh"] = True
+                        turn["step"].set_text(f"Step {last_step}")
+                        turn_state["turn"] = turn
                     elif event.kind == "reasoning":
                         stop_waiting()
                         reasoning += event.text
@@ -480,6 +527,7 @@ def build_ui(cfg: Config, session: Session) -> None:
         before = len(session.history)
         outcome = await consume(stream)
         busy["ask"] = busy["agent"] = False
+        restore_drafts(session.take_stopped_drafts())
         if len(session.history) > before:
             render_history()  # the run ended with an answer: rebuild with tool traces and sources
         refresh_sources()
@@ -502,6 +550,9 @@ def build_ui(cfg: Config, session: Session) -> None:
                 action=proceed if session.resumable else None,
                 action_label="Resume",
             )
+        leftovers = [] if outcome["paused"] else session.take_leftovers()
+        if leftovers:
+            await start_agent("\n".join(leftovers))  # the run ended before it could read them: make them a normal turn
 
     async def start_agent(text: str) -> None:
         question.set_value("")
@@ -534,11 +585,35 @@ def build_ui(cfg: Config, session: Session) -> None:
         pause_box.clear()
         notice_box.clear()
         render_history()
+        restore_drafts(session.take_stopped_drafts())
         update_controls()
+
+    STEER_NOTICES = {
+        "full": "The agent has not read your earlier messages yet.",
+        "too_long": "Keep follow-ups under 2000 characters.",
+    }
+
+    async def steer(text: str) -> None:
+        result = session.steer(text)
+        if result.status == "queued":
+            question.set_value("")
+            add_queued(result.id, text)
+        elif result.status == "no_run":
+            if busy["agent"]:  # the run finished a moment ago; the stream has not wound down yet
+                show_notice("The run just finished. Send your message again.", info=True)
+            else:
+                await start_agent(text)
+        elif result.status in STEER_NOTICES:
+            show_notice(STEER_NOTICES[result.status], info=True)
 
     async def send() -> None:
         text = (question.value or "").strip()
-        if not text or busy["ask"] or busy["scrape"] or not model_select.value or session.pending is not None:
+        if not text or not model_select.value:
+            return
+        if agent_switch.value and (busy["agent"] or session.pending is not None):
+            await steer(text)
+            return
+        if busy["ask"] or busy["scrape"] or session.pending is not None:
             return
         if agent_switch.value:
             await start_agent(text)
