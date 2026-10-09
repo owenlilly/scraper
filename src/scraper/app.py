@@ -1,5 +1,6 @@
 """NiceGUI front end. Renders Session state and forwards user actions; no business logic."""
 
+import json
 from collections import deque
 from contextlib import aclosing
 
@@ -7,6 +8,7 @@ from nicegui import ui
 
 from .config import Config
 from .context import estimate_tokens
+from .exports import rows_to_csv, rows_to_json
 from .fetch import FetchError, Page
 from .llm import LLMUnavailable, ModelInfo
 from .session import Session
@@ -43,6 +45,13 @@ def describe_call(name: str, args: dict) -> str:
 def shorten(text: str, limit: int = 1500) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "\n[shortened]"
 
+
+def table_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
 
 def build_ui(cfg: Config, llm, session: Session) -> None:
     apply_theme()
@@ -86,6 +95,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         with split.after:
             with ui.scroll_area().classes("w-full h-[calc(100vh-20rem)] min-h-[14rem]") as chat_scroll:
                 chat_box = ui.column().classes("w-full gap-2 pc-chat")
+            results_box = ui.column().classes("w-full pc-results")
             pause_box = ui.column().classes("w-full pc-pause")
             with ui.row().classes("w-full items-center pc-compose"):
                 agent_switch = ui.switch("Agent", value=True).props("dense").mark("agent")
@@ -196,6 +206,28 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                         ui.label("Based on " + ", ".join(message.sources)).classes("pc-cite")
         chat_scroll.scroll_to(percent=1.0)
 
+    def refresh_results() -> None:
+        results_box.clear()
+        rows = session.rows
+        results_box.set_visibility(bool(rows))
+        if not rows:
+            return
+        columns = list(dict.fromkeys(key for row in rows for key in row))
+        with results_box:
+            with ui.row().classes("w-full items-center"):
+                ui.label(f"Results: {len(rows)} row(s)").classes("pc-pane-title")
+                ui.button(
+                    "Download CSV", icon="download", on_click=lambda: ui.download.content(rows_to_csv(session.rows).encode("utf-8"), "results.csv", "text/csv")
+                ).props("flat dense").mark("download-csv")
+                ui.button(
+                    "Download JSON", icon="download", on_click=lambda: ui.download.content(rows_to_json(session.rows).encode("utf-8"), "results.json", "application/json")
+                ).props("flat dense").mark("download-json")
+            ui.table(
+                columns=[{"name": c, "label": c, "field": c, "align": "left"} for c in columns],
+                rows=[{"_i": i, **{c: table_cell(row.get(c)) for c in columns}} for i, row in enumerate(rows)],
+                row_key="_i",
+            ).classes("w-full pc-table").props("dense flat")
+
     # ---- scrape --------------------------------------------------------------
     async def do_scrape() -> None:
         if busy["scrape"] or busy["ask"]:
@@ -223,6 +255,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         refresh_sources()
         if session.pages:
             show_preview(session.pages[0])
+            refresh_results()
             if session.pages[0].looks_empty and mode_select.value == "fast":
 
                 async def use_dynamic() -> None:
@@ -364,6 +397,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                                 ui.label(shorten(event.text)).classes("pc-tool-result")
                         if event.urls:
                             refresh_sources()
+                    elif event.kind == "rows_added":
+                        refresh_results()
                     elif event.kind == "needs_input":
                         outcome["paused"] = True
                     elif event.kind == "limit":
@@ -388,6 +423,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             render_history()  # the run ended with an answer: rebuild with tool traces and sources
         refresh_sources()
         update_controls()
+        refresh_results()
         if outcome["paused"]:
             show_pause(session.pending)
         elif outcome["error"]:
@@ -490,6 +526,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         pause_box.clear()
         notice_box.clear()
         preview.set_content("Scraped text appears here, exactly as the model receives it.")
+        refresh_results()
         render_history()
         refresh_sources()
         update_controls()
@@ -518,6 +555,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
     if session.pages:
         show_preview(session.pages[0])
     update_controls()
+    refresh_results()
     if session.pending is not None:
         show_pause(session.pending)
     elif session.resumable:

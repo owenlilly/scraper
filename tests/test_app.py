@@ -6,7 +6,7 @@ from fakes import FakeLLM, ScriptedChat, ai, call, make_fetch, make_page
 from nicegui import ui
 from nicegui.testing import User
 
-from scraper.app import build_ui, describe_call, shorten
+from scraper.app import build_ui, describe_call, shorten, table_cell
 from scraper.config import Config
 from scraper.llm import Event
 from scraper.session import Session
@@ -344,3 +344,45 @@ async def test_new_session_clears_pages_and_chat_after_confirmation(user: User):
     user.find(marker="confirm-new").click()
     await user.should_see("No pages yet.")
     assert session.pages == [] and session.history == []
+
+
+# ---- results table ----------------------------------------------------------
+
+
+def test_table_cell():
+    assert table_cell(None) == "" and table_cell("x") == "x" and table_cell(3) == 3
+    assert table_cell({"a": [1]}) == '{"a": [1]}'
+
+
+async def test_rows_appear_in_a_table_with_downloads(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    rows = [{"name": "Starter", "price": "$10"}, {"name": "Team", "price": "$40"}]
+    session, _ = agent_session(web, [ai("", call("add_rows", "c1", rows=rows)), ai("Added the plans.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await user.should_not_see("Download CSV")
+    await send_instruction(user, f"Collect plans from {SITE}")
+    await user.should_see("Added the plans.")
+    await user.should_see("Results: 2 row(s)")
+    await user.should_see(ui.table)
+    user.find(marker="download-csv").click()
+    download = await user.download.next()
+    assert "name,price" in download.text and "Starter" in download.text
+    user.find(marker="download-json").click()
+    download = await user.download.next()
+    assert '"Team"' in download.text
+
+
+async def test_a_new_manual_scrape_clears_the_results_table(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    session, _ = agent_session(web, [ai("", call("add_rows", "c1", rows=[{"a": 1}])), ai("Added.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Collect from {SITE}")
+    await user.should_see("Results: 1 row(s)")
+    user.find(marker="url").type(SITE)
+    user.find(marker="scrape").click()
+    await user.should_not_see("Download CSV")
+    assert session.rows == []
