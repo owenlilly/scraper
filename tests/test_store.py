@@ -118,3 +118,16 @@ def test_preferences_persist_and_survive_a_wipe(tmp_path):
     reopened = SessionStore(tmp_path / "s.db")
     assert reopened.get_pref("provider") == "lmstudio"
     assert reopened.get_pref("model.lmstudio") == "qwen"
+
+
+def test_a_run_record_saved_before_follow_ups_existed_still_loads(tmp_path):
+    import json
+    from dataclasses import asdict
+
+    from scraper.store import RunRecord, SessionStore
+
+    store = SessionStore(tmp_path / "s.db")
+    data = asdict(RunRecord(number=1, instruction="x"))
+    del data["followups"]
+    store._run(lambda conn: conn.execute("INSERT OR REPLACE INTO run (id, data) VALUES (1, ?)", (json.dumps(data),)))
+    assert store.load_run().followups == []

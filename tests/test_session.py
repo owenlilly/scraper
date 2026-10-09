@@ -312,6 +312,54 @@ async def proceed_all(session):
     return [event async for event in session.proceed_run()]
 
 
+async def paused_session(**kwargs):
+    """A session whose run is paused on a question, so it is live but not streaming."""
+    session, _ = agent_session({}, [ai("", call("ask_user", "c1", question="Which plan?"))], **kwargs)
+    await run_all(session, "do it")
+    assert session.run.status == "paused"
+    return session
+
+
+async def test_steer_queues_a_follow_up_on_a_live_run_and_saves_it(tmp_path):
+    store = SessionStore(tmp_path / "s.db")
+    session = await paused_session(store=store)
+    result = session.steer("  also the SKU  ")
+    assert result.status == "queued" and result.id
+    assert store.load_run().followups == [{"id": result.id, "text": "also the SKU", "delivered": False}]
+
+
+async def test_steer_says_there_is_no_run_when_nothing_is_live():
+    session, _ = agent_session({}, [])
+    assert session.steer("hello").status == "no_run"
+    session = await paused_session()
+    session.run.status = "done"
+    assert session.steer("hello").status == "no_run"
+
+
+async def test_steer_refuses_blank_oversized_and_too_many_follow_ups():
+    session = await paused_session()
+    assert session.steer("   ").status == "empty"
+    assert session.steer("x" * 2001).status == "too_long"
+    assert session.steer("x" * 2000).status == "queued"
+    for n in range(4):
+        assert session.steer(f"message {n}").status == "queued"
+    assert session.steer("one too many").status == "full"
+    assert len(session.run.followups) == 5
+
+
+async def test_leftovers_come_back_only_when_the_run_ended_for_good(tmp_path):
+    store = SessionStore(tmp_path / "s.db")
+    session = await paused_session(store=store)
+    session.steer("first")
+    session.steer("second")
+    assert session.take_leftovers() == []  # still paused: they stay queued for the agent
+    assert len(session.run.followups) == 2
+    session.run.status = "done"
+    assert session.take_leftovers() == ["first", "second"]
+    assert session.run.followups == [] and store.load_run().followups == []
+    assert session.take_leftovers() == []
+
+
 async def test_agent_errors_name_the_providers_server_not_lm_studio():
     error = openai.APIConnectionError(request=httpx.Request("POST", "https://api.mistral.ai/v1/chat/completions"))
     llm = FakeLLM()

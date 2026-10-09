@@ -45,6 +45,7 @@ class RunRecord:
     context_sources: list[str] = field(default_factory=list)
     rows_added: int = 0
     trace: list[dict] = field(default_factory=list)
+    followups: list[dict] = field(default_factory=list)
 
     @property
     def resumable(self) -> bool:

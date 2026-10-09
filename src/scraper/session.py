@@ -2,10 +2,13 @@
 
 import asyncio
 import threading
+import uuid
 from contextlib import contextmanager
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from dataclasses import dataclass
+from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -50,6 +53,16 @@ class SessionBusy(RuntimeError):
     """Another run or scrape holds the session (for example from a second browser tab)."""
 
 
+MAX_QUEUED_FOLLOWUPS = 5
+MAX_FOLLOWUP_CHARS = 2000
+
+
+@dataclass(frozen=True)
+class SteerResult:
+    status: Literal["queued", "no_run", "empty", "full", "too_long"]
+    id: str = ""
+
+
 def agent_system_prompt(cfg: Config) -> str:
     return AGENT_PROMPT.format(max_steps=cfg.agent_max_steps, max_pages=cfg.agent_max_pages)
 
@@ -86,6 +99,7 @@ class Session:
         self._toolbox: ToolBox | None = None
         self._cancel = threading.Event()
         self.busy = False
+        self._stopped_drafts: list[str] = []
 
     @contextmanager
     def _exclusive(self):
@@ -151,6 +165,44 @@ class Session:
 
     def cancel(self) -> None:
         self._cancel.set()
+
+    def steer(self, text: str) -> SteerResult:
+        """Queue a message for the live run to read before its next model call."""
+        run = self.run
+        if run is None or run.status not in ("running", "paused"):
+            return SteerResult("no_run")
+        text = text.strip()
+        if not text:
+            return SteerResult("empty")
+        if len(self._undelivered()) >= MAX_QUEUED_FOLLOWUPS:
+            return SteerResult("full")
+        if len(text) > MAX_FOLLOWUP_CHARS:
+            return SteerResult("too_long")
+        followup = {"id": uuid.uuid4().hex, "text": text, "delivered": False}
+        run.followups.append(followup)
+        self._save_run()
+        return SteerResult("queued", followup["id"])
+
+    def _undelivered(self) -> list[dict]:
+        return [f for f in self.run.followups if not f["delivered"]] if self.run is not None else []
+
+    def _take_undelivered(self) -> list[str]:
+        taken = self._undelivered()
+        if taken:
+            self.run.followups = [f for f in self.run.followups if f["delivered"]]
+            self._save_run()
+        return [f["text"] for f in taken]
+
+    def take_leftovers(self) -> list[str]:
+        """Messages the agent never read because its run ended for good; the caller sends them as a new turn."""
+        if self.run is None or self.run.status not in ("done", "ended"):
+            return []
+        return self._take_undelivered()
+
+    def take_stopped_drafts(self) -> list[str]:
+        """Messages handed back by Stop or Discard, to restore to the composer."""
+        drafts, self._stopped_drafts = self._stopped_drafts, []
+        return drafts
 
     def _on_progress(self, done: int, cap: int) -> None:
         self.progress = (done, cap)
