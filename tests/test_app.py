@@ -1,3 +1,5 @@
+import asyncio
+
 from fakes import FakeLLM, make_fetch, make_page
 from nicegui import ui
 from nicegui.testing import User
@@ -47,3 +49,60 @@ async def test_a_failed_scrape_shows_an_inline_notice(user: User):
     user.find(marker="url").type(SITE)
     user.find(marker="scrape").click()
     await user.should_see("HTTP 404")
+
+
+class ExplodingLLM(FakeLLM):
+    attempts = 0
+
+    async def stream_chat(self, model, messages):
+        self.attempts += 1
+        yield Event("reasoning", "starting")
+        raise RuntimeError("socket fell over")
+
+
+async def test_an_unexpected_stream_failure_is_shown_and_unlocks_the_composer(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    llm = ExplodingLLM()
+    session = Session(Config(request_delay=0.0), llm, make_fetch(web))
+    register_page(llm, session)
+
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    user.find(marker="url").type(SITE)
+    user.find(marker="scrape").click()
+    await user.should_see("Site Title")
+
+    user.find(marker="question").type("first")
+    user.find(marker="send").click()
+    await user.should_see("socket fell over")
+
+    user.find(marker="question").type("again")
+    user.find(marker="send").click()
+    for _ in range(30):
+        if llm.attempts == 2:
+            break
+        await asyncio.sleep(0.1)
+    assert llm.attempts == 2
+
+
+async def test_error_after_an_interrupted_answer_is_not_blamed_on_that_answer(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    llm = FakeLLM([Event("answer", "Par"), Event("error", "died")])
+    session = Session(Config(request_delay=0.0), llm, make_fetch(web))
+    register_page(llm, session)
+
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    user.find(marker="url").type(SITE)
+    user.find(marker="scrape").click()
+    await user.should_see("Site Title")
+
+    user.find(marker="question").type("first")
+    user.find(marker="send").click()
+    await user.should_see("The answer was cut off.")
+
+    llm.events = [Event("error", "LM Studio went away")]
+    user.find(marker="question").type("second")
+    user.find(marker="send").click()
+    await user.should_see("LM Studio went away")
+    await user.should_not_see("The answer was cut off.")

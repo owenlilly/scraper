@@ -16,6 +16,7 @@ NOISE_TAGS = ["script", "style", "noscript", "svg", "nav", "footer", "aside", "i
 EMPTY_THRESHOLD = 200
 BROWSER_MISSING = ("Executable doesn't exist", "playwright install", "scrapling install")
 _SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,8 @@ def validate_url(raw: str) -> str:
         match = _SCHEME.match(url)
         if match and not url[match.end() : match.end() + 1].isdigit():
             raise FetchError("Only http and https URLs are supported")
-        url = "https://" + url
+        bare_host = urlparse("//" + url).hostname  # ValueError on a malformed port is handled below
+        url = ("http://" if bare_host in LOOPBACK_HOSTS else "https://") + url
     parts = urlparse(url)
     if parts.scheme not in ("http", "https"):
         raise FetchError("Only http and https URLs are supported")

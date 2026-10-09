@@ -15,10 +15,24 @@ class CrawlResult:
     failed: list[tuple[str, str]] = field(default_factory=list)
 
 
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def normalize(url: str) -> str:
+    """Canonical form for de-duplication: no fragment, lower-case host, default port and trailing slash dropped."""
     base, _ = urldefrag(url)
     parts = urlparse(base)
-    return parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=parts.path or "/").geturl()
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    port = parts.port
+    netloc = host if port in (None, DEFAULT_PORTS.get(scheme)) else f"{host}:{port}"
+    userinfo = parts.netloc.rpartition("@")[0]
+    if userinfo:
+        netloc = f"{userinfo}@{netloc}"
+    path = parts.path.rstrip("/") or "/"
+    return parts._replace(scheme=scheme, netloc=netloc, path=path).geturl()
 
 
 def _host(url: str) -> str:

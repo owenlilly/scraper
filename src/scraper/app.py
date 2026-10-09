@@ -217,9 +217,11 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                 else:
                     error_text = event.text
                 chat_scroll.scroll_to(percent=1.0)
+        except Exception as exc:  # surface anything unexpected instead of leaving the UI locked
+            error_text = f"Unexpected error: {exc}"
         finally:
             busy["ask"] = False
-        interrupted = bool(session.history) and session.history[-1].interrupted
+        interrupted = session.last_ask_interrupted
         render_history()
         refresh_sources()
         update_controls()
@@ -234,6 +236,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             )
 
     async def regenerate() -> None:
+        if busy["ask"] or busy["scrape"]:
+            return
         original = session.pop_interrupted()
         if original:
             render_history()

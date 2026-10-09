@@ -88,16 +88,17 @@ def _clean(text: str) -> str:
     return text.replace("</page>", "<\\/page>").replace("</excerpt>", "<\\/excerpt>")
 
 
-def _quote(text: str) -> str:
-    return text.replace('"', "'")
+def _attr(text: str) -> str:
+    """Make untrusted text safe inside a quoted tag attribute."""
+    return _clean(text).replace('"', "'").replace("\n", " ")
 
 
 def _page_block(page: Page) -> str:
-    return f'<page url="{_quote(page.url)}" title="{_quote(page.title)}">\n{_clean(page.markdown)}\n</page>'
+    return f'<page url="{_attr(page.url)}" title="{_attr(page.title)}">\n{_clean(page.markdown)}\n</page>'
 
 
 def _excerpt_block(chunk: Chunk) -> str:
-    return f'<excerpt url="{_quote(chunk.url)}" section="{_quote(chunk.heading)}">\n{_clean(chunk.text)}\n</excerpt>'
+    return f'<excerpt url="{_attr(chunk.url)}" section="{_attr(chunk.heading)}">\n{_clean(chunk.text)}\n</excerpt>'
 
 
 def _tokenize(text: str) -> list[str]:
@@ -108,8 +109,9 @@ def build(pages: Sequence[Page], question: str, token_budget: int) -> Context:
     pages = [p for p in pages if p.markdown.strip()]
     if not pages:
         return Context("", (), "full")
-    if sum(estimate_tokens(p.markdown) for p in pages) <= token_budget:
-        return Context("\n\n".join(_page_block(p) for p in pages), tuple(p.url for p in pages), "full")
+    full = "\n\n".join(_page_block(p) for p in pages)
+    if estimate_tokens(full) <= token_budget:
+        return Context(full, tuple(p.url for p in pages), "full")
     return _retrieve(pages, question, token_budget)
 
 

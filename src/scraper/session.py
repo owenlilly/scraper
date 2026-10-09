@@ -39,6 +39,7 @@ class Session:
         self.history: list[Message] = []
         self.last_context: ctx.Context | None = None
         self.progress: tuple[int, int] = (0, 0)
+        self.last_ask_interrupted = False
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -80,7 +81,7 @@ class Session:
             return self.history.pop().content
         return None
 
-    def _recent_history(self, budget_tokens: int) -> list[dict]:
+    def _recent_history(self, budget_tokens: int) -> tuple[list[dict], int]:
         pairs = [(u, a) for u, a in zip(self.history[0::2], self.history[1::2]) if not a.interrupted]
         kept: list[dict] = []
         used = 0
@@ -93,14 +94,17 @@ class Session:
                 {"role": "assistant", "content": assistant.content},
             ]
             used += cost
-        return kept
+        return kept, used
 
     async def ask(self, question: str, model: str) -> AsyncIterator[Event]:
+        self.last_ask_interrupted = False
         if not self.pages:
             yield Event("error", "Scrape a page first.")
             return
         window = await self.llm.context_length(model)
-        budget = max(200, int(window * self.cfg.context_fraction) - self.cfg.reply_reserve)
+        history, history_tokens = self._recent_history(self.cfg.history_reserve)
+        fixed = ctx.estimate_tokens(SYSTEM_PROMPT) + ctx.estimate_tokens(question)
+        budget = max(200, int(window * self.cfg.context_fraction) - self.cfg.reply_reserve - history_tokens - fixed)
         context = ctx.build(self.pages, question, budget)
         self.last_context = context
         if not context.text:
@@ -108,7 +112,7 @@ class Session:
             return
         messages = [
             {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nPage content:\n{context.text}"},
-            *self._recent_history(self.cfg.history_reserve),
+            *history,
             {"role": "user", "content": question},
         ]
         answer, reasoning, failed = "", "", False
@@ -129,3 +133,4 @@ class Session:
             return
         self.history.append(Message("user", question))
         self.history.append(Message("assistant", answer, reasoning, context.sources, interrupted=failed))
+        self.last_ask_interrupted = failed

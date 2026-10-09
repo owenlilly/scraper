@@ -109,3 +109,20 @@ def test_same_domain_helper():
 def test_normalize_drops_fragment_and_lowercases_host():
     assert normalize("HTTPS://A.Test") == "https://a.test/"
     assert normalize("https://a.test/p#frag") == "https://a.test/p"
+
+
+def test_normalize_collapses_trailing_slash_and_default_ports():
+    assert normalize("https://a.test/a/") == normalize("https://a.test/a")
+    assert normalize("https://a.test:443/a") == "https://a.test/a"
+    assert normalize("http://a.test:80/") == "http://a.test/"
+    assert normalize("https://a.test:8443/a") == "https://a.test:8443/a"
+    assert normalize("https://a.test/a?x=1") == "https://a.test/a?x=1"
+
+
+def test_trailing_slash_and_default_port_variants_are_fetched_once():
+    # Review Focus 4
+    web = {A: make_page(A, links=[A + "/", "https://site.test:443/a", B, B + "/"]), B: make_page(B)}
+    result, fetched = run(web, web[A], depth=2)
+    assert fetched == [B]
+    assert result.failed == []
+    assert [p.url for p in result.pages] == [A, B]

@@ -4,6 +4,7 @@ import pytest
 
 from fakes import FakeLLM, make_fetch, make_page
 from scraper.config import Config
+from scraper.context import estimate_tokens
 from scraper.fetch import FetchError
 from scraper.llm import Event
 from scraper.session import SYSTEM_PROMPT, Message, Session
@@ -180,3 +181,29 @@ async def test_interrupted_exchanges_are_not_replayed_to_the_model():
     await ask_all(session, "second")
     assert [m["role"] for m in llm.calls[-1]] == ["system", "user"]
     assert llm.calls[-1][-1]["content"] == "second"
+
+
+async def test_ask_reports_whether_it_recorded_an_interrupted_answer():
+    web = {A: make_page(A)}
+    llm = FakeLLM([Event("answer", "Par"), Event("error", "died")])
+    session = make_session(web, llm)
+    await session.scrape(A)
+    await ask_all(session, "first")
+    assert session.last_ask_interrupted is True
+    llm.events = [Event("error", "down")]
+    await ask_all(session, "second")
+    assert session.last_ask_interrupted is False
+    assert [m.content for m in session.history] == ["first", "Par"]
+
+
+async def test_prompt_plus_reply_reserve_fits_the_window_even_with_history():
+    filler = "lorem ipsum dolor sit amet " * 110
+    md = "".join(f"# Section {n}\n\n{filler}\n\n" for n in range(10))
+    web = {A: make_page(A, markdown=md)}
+    llm = FakeLLM([Event("answer", "x" * 1980)], window=8192)
+    session = make_session(web, llm)
+    await session.scrape(A)
+    for n in range(7):
+        await ask_all(session, f"lorem q{n}")
+    prompt_tokens = sum(estimate_tokens(m["content"]) for m in llm.calls[-1])
+    assert prompt_tokens + CFG.reply_reserve <= 8192

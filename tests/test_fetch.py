@@ -59,7 +59,9 @@ def fake_response(html="<html><body>ok</body></html>", status=200, ctype="text/h
         ("example.com", "https://example.com"),
         ("  https://example.com/a?b=1  ", "https://example.com/a?b=1"),
         ("http://localhost:8080/x", "http://localhost:8080/x"),
-        ("localhost:8080/x", "https://localhost:8080/x"),
+        ("localhost:8080/x", "http://localhost:8080/x"),
+        ("127.0.0.1:8765/index.html", "http://127.0.0.1:8765/index.html"),
+        ("https://localhost:8080/x", "https://localhost:8080/x"),
     ],
 )
 def test_validate_url_accepts_and_normalises(raw, expected):
