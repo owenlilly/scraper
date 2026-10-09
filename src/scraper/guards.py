@@ -20,6 +20,7 @@ LIMIT_ACTIONS = [
     {"label": "Stop", "action": "stop"},
 ]
 WRAP_UP_TEXT = "Limit reached. Do not call any more tools. Reply now with your final answer based on what you have collected."
+FOLLOWUP_KEY = "followup"
 CONTINUE_TEXT = {
     "steps": "The user wants you to keep going.",
     "pages": "The user granted more page fetches. Keep going.",
@@ -198,3 +199,51 @@ class RunGuard(AgentMiddleware):
         if request.state.get("wrap_up"):
             request = request.override(tools=[])
         return await handler(request)
+
+
+class FollowupInbox(AgentMiddleware):
+    """Hands the user's messages sent mid-run to the model, before its next call.
+
+    The conversation state is the source of truth: a follow-up whose id is already a message in
+    the state is never injected again, so a crash between the checkpoint and the delivered flag
+    cannot duplicate it.
+    """
+
+    state_schema = GuardState
+
+    def __init__(self, pending: Callable[[], list[dict]], on_inject: Callable[[dict], None] | None = None) -> None:
+        self._pending = pending
+        self._on_inject = on_inject
+
+    def _waiting(self, messages) -> list[dict]:
+        seen = {message.id for message in messages if message.id}
+        return [followup for followup in self._pending() if followup["id"] not in seen]
+
+    def before_model(self, state, runtime):
+        waiting = self._waiting(state["messages"])
+        if not waiting:
+            return None
+        if self._on_inject is not None:
+            for followup in waiting:
+                self._on_inject(followup)
+        return {
+            "messages": [
+                HumanMessage(followup["text"], id=followup["id"], additional_kwargs={FOLLOWUP_KEY: True}) for followup in waiting
+            ]
+        }
+
+    async def abefore_model(self, state, runtime):
+        return self.before_model(state, runtime)
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """A final answer is not the end while the user's message is still unread: answer it in this run."""
+        messages = state["messages"]
+        last = messages[-1] if messages else None
+        if not isinstance(last, AIMessage) or last.tool_calls or last.invalid_tool_calls or not _text(last).strip():
+            return None  # unparseable tool calls belong to RunGuard's correction
+        return {"jump_to": "model"} if self._waiting(messages) else None
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        return self.after_model(state, runtime)

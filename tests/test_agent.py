@@ -16,7 +16,7 @@ MESSAGES = [{"role": "user", "content": "go"}]
 WEB = {URL: make_page(URL, markdown="# Pricing\n\nStarter ten dollars."), OTHER: make_page(OTHER)}
 
 
-def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, max_tokens=100_000, max_pages=30, provider="LM Studio"):
+def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, max_tokens=100_000, max_pages=30, provider="LM Studio", followups=None):
     pages, rows = [], []
     box = ToolBox(pages=pages, rows=rows, fetch_fn=make_fetch(web if web is not None else WEB), allowed_hosts=set(hosts), max_pages=max_pages)
     model = ScriptedChat(script=list(script))
@@ -28,6 +28,7 @@ def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, m
         max_steps=max_steps,
         max_context_tokens=max_tokens,
         on_grant=lambda reason: box.grant_pages(),
+        followups=followups,
     )
     return AgentRunner(agent, max_steps=max_steps, base_url="http://lm.test/v1", provider=provider), box, model, pages, rows
 
@@ -286,3 +287,16 @@ async def test_an_empty_final_reply_is_marked_final_so_no_resume_is_offered():
     runner, *_ = setup([ai("")])
     events = await collect(runner.run("t1", MESSAGES))
     assert events[-1].kind == "error" and events[-1].payload == {"final": True}
+
+
+async def test_a_delivered_follow_up_is_reported_as_an_event():
+    calls = {"n": 0}
+
+    def pending():
+        calls["n"] += 1
+        return [] if calls["n"] == 1 else [{"id": "f1", "text": "also the SKU", "delivered": False}]
+
+    runner, *_ = setup([ai("", call("fetch_page", "c1", url=URL)), ai("done")], followups=pending)
+    events = await collect(runner.run("t", MESSAGES))
+    assert [(e.id, e.text) for e in events if e.kind == "followup"] == [("f1", "also the SKU")]
+    assert events[-1].kind == "done"

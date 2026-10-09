@@ -10,16 +10,16 @@ from typing import Literal
 import httpx
 import openai
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
-from .guards import ContextTrim, RunGuard
+from .guards import FOLLOWUP_KEY, ContextTrim, FollowupInbox, RunGuard
 
 
 @dataclass(frozen=True)
 class AgentEvent:
-    kind: Literal["step", "reasoning", "answer", "tool_start", "tool_result", "rows_added", "needs_input", "limit", "error", "done"]
+    kind: Literal["step", "reasoning", "answer", "tool_start", "tool_result", "rows_added", "needs_input", "limit", "error", "done", "followup"]
     text: str = ""
     name: str = ""
     args: dict = field(default_factory=dict)
@@ -28,6 +28,7 @@ class AgentEvent:
     count: int = 0
     urls: tuple[str, ...] = ()
     payload: dict = field(default_factory=dict)
+    id: str = ""
 
 
 async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSaver:
@@ -53,13 +54,16 @@ async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSav
         return saver
 
 
-def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None):
+def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None):
+    middleware = [ContextTrim(max_context_tokens), RunGuard(max_steps=max_steps, on_grant=on_grant)]
+    if followups is not None:
+        middleware.append(FollowupInbox(followups, on_inject))  # last: a run paused inside RunGuard must still pass through it on resume
     return create_agent(
         model,
         tools=tools,
         system_prompt=system_prompt,
         checkpointer=checkpointer,
-        middleware=[ContextTrim(max_context_tokens), RunGuard(max_steps=max_steps, on_grant=on_grant)],
+        middleware=middleware,
     )
 
 
@@ -145,6 +149,10 @@ class AgentRunner:
         for node, update in chunk.items():
             if not isinstance(update, dict):
                 continue
+            if node.endswith("before_model"):
+                for message in update.get("messages") or []:
+                    if isinstance(message, HumanMessage) and message.additional_kwargs.get(FOLLOWUP_KEY):
+                        yield AgentEvent("followup", _plain(message.content), id=message.id or "")
             if node.endswith("before_model") and "steps" in update:
                 yield AgentEvent("step", step=update["steps"])
             elif node == "model":

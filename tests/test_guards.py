@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from scraper.guards import TRIMMED, ContextTrim, RunGuard
+from scraper.guards import TRIMMED, ContextTrim, FollowupInbox, RunGuard
 
 probed: list[str] = []
 
@@ -165,3 +165,73 @@ async def test_repeated_invalid_tool_calls_stop_instead_of_looping():
     agent, model = build([bad_call(n) for n in range(1, 6)])
     _, state = await drive(agent, first())
     assert state.next == () and len(model.calls) == 3  # the first call plus two corrections, then it gives up
+
+
+queue: list[dict] = []
+
+
+@tool(response_format="content_and_artifact")
+def probe_then_queue(url: str) -> tuple[str, dict]:
+    """Probe a URL while the user types a follow-up."""
+    queue.append({"id": "f1", "text": "also the SKU", "delivered": False})
+    return f"probed {url}", {"ok": True, "fetched": [url], "rows_added": 0, "limit": None}
+
+
+def build_with_inbox(script, pending, *, tools=(probe,), injected=None):
+    model = ScriptedChat(script=list(script))
+    agent = create_agent(
+        model,
+        tools=list(tools),
+        system_prompt="x",
+        checkpointer=InMemorySaver(),
+        middleware=[
+            ContextTrim(100_000),
+            RunGuard(max_steps=25),
+            FollowupInbox(pending, on_inject=injected.append if injected is not None else None),
+        ],
+    )
+    return agent, model
+
+
+def humans(call_record):
+    return [m.content for m in call_record["messages"] if isinstance(m, HumanMessage)]
+
+
+async def test_a_follow_up_queued_during_a_tool_call_is_injected_exactly_once_before_the_next_model_call():
+    queue.clear()
+    injected = []
+    script = [ai("", call("probe_then_queue", "c1", url="a")), ai("done")]
+    agent, model = build_with_inbox(script, lambda: list(queue), tools=(probe_then_queue,), injected=injected)
+    _, state = await drive(agent, first())
+    assert "also the SKU" not in humans(model.calls[0])
+    assert humans(model.calls[1])[-1] == "also the SKU"
+    sent = [m for m in state.values["messages"] if m.additional_kwargs.get("followup")]
+    assert [(m.id, m.content) for m in sent] == [("f1", "also the SKU")]  # the flag was never set, yet no second copy
+    assert [f["id"] for f in injected] == ["f1"] and len(model.calls) == 2
+
+
+async def test_a_follow_up_arriving_with_the_final_answer_sends_the_run_back_to_the_model():
+    calls = {"n": 0}
+
+    def pending():
+        calls["n"] += 1
+        return [] if calls["n"] == 1 else [{"id": "f1", "text": "one more thing", "delivered": False}]
+
+    agent, model = build_with_inbox([ai("First answer."), ai("Second answer.")], pending)
+    _, state = await drive(agent, first())
+    assert len(model.calls) == 2 and humans(model.calls[1])[-1] == "one more thing"
+    assert state.values["messages"][-1].content == "Second answer."
+
+
+async def test_a_reply_with_unparseable_tool_calls_is_corrected_not_mistaken_for_a_final_answer():
+    calls = {"n": 0}
+
+    def pending():
+        calls["n"] += 1
+        return [] if calls["n"] == 1 else [{"id": "f1", "text": "ignore me", "delivered": False}]
+
+    agent, model = build_with_inbox([bad_call(1), ai("", call("probe", "c2", url="a")), ai("fixed")], pending)
+    _, state = await drive(agent, first())
+    assert state.values["messages"][-1].content == "fixed" and len(model.calls) == 3
+    second = humans(model.calls[1])
+    assert any("not valid JSON" in text for text in second) and second[-1] == "ignore me"
