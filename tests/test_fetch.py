@@ -1,5 +1,6 @@
 import http.server
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -174,3 +175,10 @@ def test_backend_error_messages_drop_library_boilerplate():
     assert "curl.se" not in err.value.message
     assert "Could not connect to server" in err.value.message
     assert "Failed to perform, curl: (7)" not in err.value.message
+
+
+def test_parse_html_keeps_raw_html_for_selectors_without_polluting_repr_or_equality():
+    page = parse_html(HOME, "https://s.test/")
+    assert "<h1>Welcome</h1>" in page.html
+    assert "html=" not in repr(page)
+    assert page == replace(page, html="something else")

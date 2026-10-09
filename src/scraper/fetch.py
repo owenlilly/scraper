@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -26,6 +26,7 @@ class Page:
     markdown: str
     links: tuple[str, ...] = ()
     looks_empty: bool = False
+    html: str = field(default="", repr=False, compare=False)
 
 
 class FetchError(Exception):
@@ -75,7 +76,7 @@ def parse_html(html: str, url: str) -> Page:
     for tag in soup(NOISE_TAGS):
         tag.decompose()
     markdown = re.sub(r"\n{3,}", "\n\n", markdownify(str(soup), heading_style="ATX")).strip()
-    return Page(url=url, title=title, markdown=markdown, links=links)
+    return Page(url=url, title=title, markdown=markdown, links=links, html=html)
 
 
 def _fast(url: str, timeout: float):

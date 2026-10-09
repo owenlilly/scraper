@@ -31,3 +31,11 @@ def test_env_overrides_are_converted_to_the_field_type():
 def test_bad_value_names_the_variable():
     with pytest.raises(ValueError, match="SCRAPER_PORT"):
         load({"SCRAPER_PORT": "not-a-number"})
+
+
+def test_agent_defaults_and_overrides():
+    cfg = load({})
+    assert (cfg.agent_max_steps, cfg.agent_max_pages, cfg.tool_result_tokens) == (25, 30, 3000)
+    assert cfg.data_dir == "~/.page-chat"
+    assert load({"SCRAPER_AGENT_MAX_STEPS": "5"}).agent_max_steps == 5
+    assert load({"SCRAPER_DATA_DIR": "/tmp/x"}).data_dir == "/tmp/x"

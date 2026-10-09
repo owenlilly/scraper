@@ -1,10 +1,10 @@
 from scraper.fetch import FetchError, Page
 
 
-def make_page(url, *, title=None, markdown=None, links=(), looks_empty=False) -> Page:
+def make_page(url, *, title=None, markdown=None, links=(), looks_empty=False, html="") -> Page:
     label = title or url
     body = markdown if markdown is not None else f"# {label}\n\nBody text for {url}."
-    return Page(url=url, title=label, markdown=body, links=tuple(links), looks_empty=looks_empty)
+    return Page(url=url, title=label, markdown=body, links=tuple(links), looks_empty=looks_empty, html=html)
 
 
 def make_fetch(web: dict[str, Page], calls: list | None = None):

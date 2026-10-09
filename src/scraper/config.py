@@ -20,6 +20,10 @@ class Config:
     crawl_depth: int = 1
     request_delay: float = 0.5
     fetch_timeout: float = 20.0
+    agent_max_steps: int = 25
+    agent_max_pages: int = 30
+    tool_result_tokens: int = 3000
+    data_dir: str = "~/.page-chat"
 
 
 def load(env: Mapping[str, str] | None = None) -> Config:
