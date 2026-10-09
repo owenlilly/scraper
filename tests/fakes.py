@@ -72,7 +72,10 @@ class ScriptedChat(BaseChatModel):
 
     def _next(self, messages):
         self.calls.append({"messages": list(messages), "tools": list(self.bound)})
-        return self.script.pop(0) if self.script else AIMessage(content="(script exhausted)")
+        item = self.script.pop(0) if self.script else AIMessage(content="(script exhausted)")
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         return ChatResult(generations=[ChatGeneration(message=self._next(messages))])
