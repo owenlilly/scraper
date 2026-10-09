@@ -348,13 +348,108 @@ def test_unexpected_exceptions_inside_a_tool_become_errors():
     assert result.is_error and "kaboom" in result.text
 
 
+# ---- fetch pacing -----------------------------------------------------------
+
+
+class FakeClock:
+    """A clock whose sleep moves time forward, so pacing is tested without waiting."""
+
+    def __init__(self):
+        self.now = 100.0
+        self.sleeps: list[float] = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(round(seconds, 6))
+        self.now += seconds
+
+
+PACED_URLS = [f"https://site.test/p{n}" for n in range(3)]
+PACED_WEB = {u: make_page(u) for u in PACED_URLS}
+
+
+def paced_box(**kw):
+    clock = FakeClock()
+    box, _, _, calls = make_box(PACED_WEB, clock=clock, sleep=clock.sleep, **kw)
+    return box, clock, calls
+
+
+def test_the_first_fetch_does_not_wait_and_the_next_waits_out_the_delay():
+    box, clock, _ = paced_box(min_delay=1.0)
+    box.execute("fetch_page", {"url": PACED_URLS[0]})
+    assert clock.sleeps == []
+    clock.now += 0.25  # the model took a quarter second to ask again
+    box.execute("fetch_page", {"url": PACED_URLS[1]})
+    assert clock.sleeps == [0.75]
+
+
+def test_no_wait_when_enough_time_has_passed_or_the_delay_is_zero():
+    box, clock, _ = paced_box(min_delay=1.0)
+    box.execute("fetch_page", {"url": PACED_URLS[0]})
+    clock.now += 5
+    box.execute("fetch_page", {"url": PACED_URLS[1]})
+    flat, flat_clock, _ = paced_box()
+    flat.execute("fetch_page", {"url": PACED_URLS[0]})
+    flat.execute("fetch_page", {"url": PACED_URLS[1]})
+    assert clock.sleeps == [] and flat_clock.sleeps == []
+
+
+def test_a_page_already_fetched_is_served_without_waiting():
+    box, clock, calls = paced_box(min_delay=1.0)
+    box.execute("fetch_page", {"url": PACED_URLS[0]})
+    box.execute("fetch_page", {"url": PACED_URLS[0]})
+    assert clock.sleeps == [] and len(calls) == 1
+
+
+def test_set_fetch_delay_slows_the_following_fetches_and_says_so():
+    box, clock, _ = paced_box(min_delay=0.5)
+    changes = []
+    box.on_delay = changes.append
+    result = box.execute("set_fetch_delay", {"seconds": 4, "reason": "the site returned 429"})
+    assert not result.is_error and "4" in result.text and box.delay == 4.0 and changes == [4.0]
+    box.execute("fetch_page", {"url": PACED_URLS[0]})
+    box.execute("fetch_page", {"url": PACED_URLS[1]})
+    assert clock.sleeps == [4.0]
+
+
+def test_the_delay_cannot_go_below_the_configured_minimum_or_above_the_maximum():
+    box, _, _ = paced_box(min_delay=0.5, max_delay=10.0)
+    low = box.execute("set_fetch_delay", {"seconds": 0})
+    assert not low.is_error and box.delay == 0.5 and "minimum" in low.text and "0.5" in low.text
+    high = box.execute("set_fetch_delay", {"seconds": 600})
+    assert not high.is_error and box.delay == 10.0 and "maximum" in high.text
+    assert box.execute("set_fetch_delay", {"seconds": 2}).text.count("minimum") == 0
+
+
+def test_a_stored_delay_is_used_from_the_start_and_never_drops_below_the_minimum():
+    box, clock, _ = paced_box(min_delay=0.5, delay=3.0)
+    assert box.delay == 3.0
+    lower, _, _ = paced_box(min_delay=2.0, delay=0.0)  # a run saved before this setting existed
+    assert lower.delay == 2.0
+
+
+@pytest.mark.parametrize("args", [{}, {"seconds": "soon"}, {"seconds": True}, {"seconds": -1}, {"seconds": float("nan")}])
+def test_bad_delay_arguments_are_tool_errors_and_leave_the_delay_alone(args):
+    box, _, _ = paced_box(min_delay=0.5)
+    result = box.execute("set_fetch_delay", args)
+    assert result.is_error and box.delay == 0.5
+
+
+def test_numeric_strings_are_accepted_as_a_delay():
+    box, _, _ = paced_box()
+    assert not box.execute("set_fetch_delay", {"seconds": "2.5"}).is_error and box.delay == 2.5
+
+
 # ---- LangChain wrappers -----------------------------------------------------
 
 
 def test_build_tools_wraps_the_toolbox_with_schemas_and_artifacts():
     box, pages, rows, _ = make_box({URL: PAGE})
     tools = {t.name: t for t in build_tools(box)}
-    assert list(tools) == ["fetch_page", "list_links", "read_page", "extract", "add_rows", "ask_user"]
+    assert list(tools) == ["fetch_page", "list_links", "read_page", "extract", "add_rows", "set_fetch_delay", "ask_user"]
+    assert sorted(tools["set_fetch_delay"].args) == ["reason", "seconds"]
     assert sorted(tools["fetch_page"].args) == ["focus", "mode", "url"]
     assert sorted(tools["ask_user"].args) == ["options", "question"]
     message = tools["fetch_page"].invoke({"type": "tool_call", "name": "fetch_page", "args": {"url": URL, "mode": "stealth"}, "id": "c1"})

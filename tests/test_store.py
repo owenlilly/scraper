@@ -106,3 +106,15 @@ def test_writes_from_several_threads_do_not_fail(tmp_path):
     [t.join() for t in threads]
     loaded = store.load()
     assert errors == [] and len(loaded.pages) == 8 and len(loaded.rows) == 8
+
+
+def test_preferences_persist_and_survive_a_wipe(tmp_path):
+    store = SessionStore(tmp_path / "s.db")
+    assert store.get_pref("provider") is None
+    store.set_pref("provider", "mistral")
+    store.set_pref("provider", "lmstudio")
+    store.set_pref("model.lmstudio", "qwen")
+    store.wipe()
+    reopened = SessionStore(tmp_path / "s.db")
+    assert reopened.get_pref("provider") == "lmstudio"
+    assert reopened.get_pref("model.lmstudio") == "qwen"

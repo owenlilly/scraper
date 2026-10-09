@@ -37,6 +37,8 @@ def describe_call(name: str, args: dict) -> str:
         return f"Extracting {args.get('selector', '')} from {url}"
     if name == "add_rows":
         return f"Adding {len(args.get('rows') or [])} row(s)"
+    if name == "set_fetch_delay":
+        return f"Setting the fetch delay to {args.get('seconds', '?')}s" + (f": {args['reason']}" if args.get("reason") else "")
     if name == "ask_user":
         return "Asking you a question"
     return name
@@ -53,24 +55,34 @@ def table_cell(value):
         return json.dumps(value, ensure_ascii=False)
     return value
 
-def build_ui(cfg: Config, llm, session: Session) -> None:
+def build_ui(cfg: Config, session: Session) -> None:
     apply_theme()
     ui.dark_mode(True)
     models: dict[str, ModelInfo] = {}
     busy = {"scrape": False, "ask": False, "agent": False}
+    syncing = {"models": False}  # True while the app itself rewrites the model list
+
+    saved_mode = session.setting("mode", "fast")
+    saved_mode = saved_mode if saved_mode in MODE_LABELS else "fast"
+    saved_depth = session.setting("depth", str(cfg.crawl_depth))
+    saved_depth = int(saved_depth) if saved_depth.isdigit() and 1 <= int(saved_depth) <= 3 else cfg.crawl_depth
 
     # ---- top bar -------------------------------------------------------------
     with ui.header(elevated=False).classes("items-center gap-3 px-4 py-2 pc-header"):
         ui.label("Page Chat").classes("pc-wordmark")
+        with ui.row().classes("items-center gap-1 pc-hosted").mark("hosted-notice") as hosted_chip:
+            ui.icon("cloud_upload", size="1rem")
+            hosted_label = ui.label()
+            hosted_tip = ui.tooltip()
         url_input = (
-            ui.input(placeholder="https://example.com")
+            ui.input(placeholder="https://example.com", value=session.setting("url", ""))
             .props("dense outlined clearable")
             .classes("grow")
             .mark("url")
         )
-        mode_select = ui.select(MODE_LABELS, value="fast").props("dense outlined")
-        follow = ui.checkbox("Follow links")
-        depth = ui.number("Depth", value=cfg.crawl_depth, min=1, max=3, precision=0).props("dense outlined").classes("w-20")
+        mode_select = ui.select(MODE_LABELS, value=saved_mode).props("dense outlined")
+        follow = ui.checkbox("Follow links", value=session.setting("follow", "0") == "1")
+        depth = ui.number("Depth", value=saved_depth, min=1, max=3, precision=0).props("dense outlined").classes("w-20")
         depth.bind_visibility_from(follow, "value")
         scrape_btn = ui.button("Scrape", icon="travel_explore").mark("scrape")
         cancel_btn = ui.button("Cancel", icon="close").props("flat").mark("cancel")
@@ -98,7 +110,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             notice_box = ui.column().classes("w-full pc-notices")
             pause_box = ui.column().classes("w-full pc-pause")
             with ui.row().classes("w-full items-center pc-compose"):
-                agent_switch = ui.switch("Agent", value=True).props("dense").mark("agent")
+                agent_switch = ui.switch("Agent", value=session.setting("agent", "1") == "1").props("dense").mark("agent")
                 question = ui.input().props("outlined dense").classes("grow").mark("question")
                 send_btn = ui.button(icon="send").props('aria-label="Send"').mark("send")
                 stop_btn = ui.button(icon="stop").props('flat color=negative aria-label="Stop"').mark("stop")
@@ -107,7 +119,14 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
     # ---- footer --------------------------------------------------------------
     with ui.footer().classes("items-center gap-3 px-4 py-1 pc-footer"):
         status_dot = ui.icon("circle", size="xs").classes("pc-dot pc-dot--bad")
-        status_label = ui.label("Connecting to LM Studio...").classes("text-xs")
+        status_label = ui.label(f"Connecting to {session.llm.name}...").classes("text-xs")
+        provider_select = (
+            ui.select({key: client.name for key, client in session.providers.items()}, value=session.provider, label="Provider")
+            .props("dense borderless")
+            .classes("min-w-32")
+            .mark("provider")
+        )
+        provider_select.set_visibility(len(session.providers) > 1)
         model_select = ui.select({}, label="Model").props("dense borderless").classes("min-w-64").mark("model")
         ctx_label = ui.label("").classes("text-xs")
 
@@ -534,31 +553,85 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         elif info.loaded and info.context:
             ctx_label.set_text(f"context {info.context:,} tokens")
         else:
-            ctx_label.set_text(f"not loaded: assuming {cfg.fallback_context:,} tokens. Load it in LM Studio.")
+            ctx_label.set_text(f"not loaded: assuming {cfg.fallback_context:,} tokens. Load it in {session.llm.name}.")
         update_controls()
+
+    def on_model_pick() -> None:
+        if model_select.value in models and not syncing["models"]:
+            session.remember_model(model_select.value)  # the user picked it: reopen with this model
+        on_model_change()
+
+    def sync_provider_chip() -> None:
+        llm = session.llm
+        hosted_chip.set_visibility(llm.hosted)
+        hosted_label.set_text(f"Pages are sent to {llm.name}")
+        hosted_tip.set_text(f"Page text is sent to {llm.name}'s servers when you ask a question or run the agent.")
 
     async def refresh_models() -> None:
         if busy["ask"]:
             return
+        llm = session.llm
         try:
             infos = await llm.list_models()
         except LLMUnavailable as exc:
+            if session.llm is not llm:  # the provider changed while we waited
+                return
             models.clear()
             model_select.set_options({})
             status_dot.classes(replace="pc-dot pc-dot--bad")
             status_label.set_text(str(exc))
             update_controls()
             return
+        if session.llm is not llm:
+            return
         models.clear()
         models.update({m.id: m for m in infos})
         labels = {m.id: m.id if m.loaded else f"{m.id} (not loaded)" for m in infos}
-        keep = model_select.value if model_select.value in labels else (infos[0].id if infos else None)
-        model_select.set_options(labels, value=keep)
+        remembered = session.preferred_model
+        keep = next((c for c in (model_select.value, remembered) if c in labels), infos[0].id if infos else None)
+        syncing["models"] = True
+        try:
+            model_select.set_options(labels, value=keep)
+        finally:
+            syncing["models"] = False
         status_dot.classes(replace="pc-dot pc-dot--ok")
-        status_label.set_text("LM Studio connected")
+        status_label.set_text(f"{llm.name} connected")
         on_model_change()
 
+    async def on_provider_change(event) -> None:
+        key = event.value
+        if key == session.provider:
+            return
+        try:
+            if any(busy.values()):
+                raise SessionBusy("Another run or scrape is already in progress. Wait for it to finish, or press Stop there.")
+            await session.set_provider(key)
+        except SessionBusy as exc:
+            provider_select.set_value(session.provider)
+            show_notice(str(exc), info=True)
+            return
+        sync_provider_chip()
+        models.clear()
+        model_select.set_options({}, value=None)
+        status_dot.classes(replace="pc-dot pc-dot--bad")
+        status_label.set_text(f"Connecting to {session.llm.name}...")
+        ctx_label.set_text("")
+        refresh_run_state()
+        update_controls()
+        await refresh_models()
+
     # ---- restore and new session ---------------------------------------------
+    def refresh_run_state() -> None:
+        """Show whichever card or banner the saved run needs under the active provider."""
+        pause_box.clear()
+        notice_box.clear()
+        if session.pending is not None:
+            show_pause(session.pending)
+        elif session.resumable:
+            show_resume_banner()
+        elif session.foreign_run is not None:
+            show_foreign_run_banner()
+
     def show_resume_banner() -> None:
         notice_box.clear()
         with notice_box, ui.element("div").classes("pc-notice pc-notice--info"):
@@ -567,6 +640,15 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             with ui.row():
                 ui.button("Resume", on_click=proceed).mark("resume")
                 ui.button("Discard run", on_click=discard).props("flat").mark("discard")
+
+    def show_foreign_run_banner() -> None:
+        run = session.foreign_run
+        notice_box.clear()
+        with notice_box, ui.element("div").classes("pc-notice pc-notice--info"):
+            ui.label(f"A run started on {run.provider} is saved.").classes("pc-notice-title")
+            ui.label(f"Instruction: {shorten(run.instruction, 160)}").classes("pc-notice-hint")
+            ui.label(f"It can only continue on {run.provider}. Discard it to carry on with {session.llm.name}.").classes("pc-notice-hint")
+            ui.button("Discard run", on_click=discard).props("flat").mark("discard")
 
     async def confirm_new_session() -> None:
         dialog.close()
@@ -577,6 +659,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         except SessionBusy as exc:
             show_notice(str(exc), info=True)
             return
+        url_input.set_value("")
         pause_box.clear()
         notice_box.clear()
         preview.set_content("Scraped text appears here, exactly as the model receives it.")
@@ -609,8 +692,14 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
     stop_btn.on_click(session.cancel)
     new_btn.on_click(dialog.open)
     question.on("keydown.enter", send)
+    url_input.on_value_change(lambda: session.set_setting("url", url_input.value or ""))
+    mode_select.on_value_change(lambda: session.set_setting("mode", str(mode_select.value)))
+    follow.on_value_change(lambda: session.set_setting("follow", "1" if follow.value else "0"))
+    depth.on_value_change(lambda: depth.value and session.set_setting("depth", str(int(depth.value))))
+    agent_switch.on_value_change(lambda: session.set_setting("agent", "1" if agent_switch.value else "0"))
     agent_switch.on_value_change(lambda: (update_controls(), render_history() if not session.history else None))
-    model_select.on_value_change(on_model_change)
+    model_select.on_value_change(on_model_pick)
+    provider_select.on_value_change(on_provider_change)
     ui.timer(0.1, refresh_models, once=True)
     ui.timer(15.0, refresh_models)
 
@@ -620,10 +709,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         show_preview(session.pages[0])
     update_controls()
     refresh_results()
-    if session.pending is not None:
-        show_pause(session.pending)
-    elif session.resumable:
-        show_resume_banner()
+    sync_provider_chip()
+    refresh_run_state()
     if session.store is not None and session.store.recovered:
         show_notice(
             "The saved session could not be read, so a fresh one was started.",

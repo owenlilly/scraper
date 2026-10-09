@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from scraper.llm import Event, LLMUnavailable, LMStudio, ModelInfo, ThinkSplitter
+from scraper.llm import Event, LLMUnavailable, LMStudio, MistralAPI, ModelInfo, ThinkSplitter, split_content
 
 BASE = "http://lm.test/v1"
 NATIVE = {
@@ -161,3 +161,111 @@ async def test_stream_with_no_content_yields_no_events():
     # Review Focus 5: the Session decides what an empty answer means
     events = await collect(client(lambda req: sse()).stream_chat("m", []))
     assert events == []
+
+
+# ---- MistralAPI -------------------------------------------------------------
+
+MISTRAL_BASE = "https://mistral.test/v1"
+MISTRAL_MODELS = {
+    "data": [
+        {"id": "mistral-embed", "capabilities": {"completion_chat": False, "function_calling": False}, "max_context_length": 8192},
+        {"id": "codestral-2508", "capabilities": {"completion_chat": True, "function_calling": False}, "max_context_length": 256000},
+        {"id": "mistral-small-latest", "capabilities": {"completion_chat": True, "function_calling": True}, "max_context_length": 131072},
+        {"id": "magistral-medium-latest", "capabilities": {"completion_chat": True, "function_calling": True}, "max_context_length": 40960},
+    ]
+}
+
+
+def mistral(handler) -> MistralAPI:
+    return MistralAPI(MISTRAL_BASE, "sk-test", fallback_context=16384, transport=httpx.MockTransport(handler))
+
+
+def test_providers_have_stable_keys_matching_the_config_names():
+    assert LMStudio(BASE).key == "lmstudio"
+    assert MistralAPI(MISTRAL_BASE, "k").key == "mistral"
+
+
+def test_providers_know_their_display_names():
+    assert LMStudio(BASE).name == "LM Studio"
+    assert MistralAPI(MISTRAL_BASE, "k").name == "Mistral"
+
+
+async def test_mistral_lists_only_tool_capable_chat_models_all_loaded():
+    seen = {}
+
+    def handler(req):
+        seen["url"] = str(req.url)
+        seen["auth"] = req.headers.get("authorization")
+        return httpx.Response(200, json=MISTRAL_MODELS)
+
+    models = await mistral(handler).list_models()
+    assert seen == {"url": f"{MISTRAL_BASE}/models", "auth": "Bearer sk-test"}
+    assert [m.id for m in models] == ["magistral-medium-latest", "mistral-small-latest"]
+    assert models[1] == ModelInfo("mistral-small-latest", "llm", True, 131072)
+    assert all(m.loaded for m in models)
+
+
+async def test_mistral_context_length_comes_from_the_model_list():
+    llm = mistral(lambda req: httpx.Response(200, json=MISTRAL_MODELS))
+    assert await llm.context_length("mistral-small-latest") == 131072
+    assert await llm.context_length("unknown-model") == 16384
+
+
+async def test_mistral_bad_key_on_listing_says_so():
+    with pytest.raises(LLMUnavailable, match="API key"):
+        await mistral(lambda req: httpx.Response(401, json={"message": "Unauthorized"})).list_models()
+
+
+async def test_mistral_unreachable_on_listing_names_mistral():
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(LLMUnavailable, match="Cannot reach Mistral"):
+        await mistral(handler).list_models()
+
+
+async def test_mistral_stream_sends_the_bearer_key():
+    seen = {}
+
+    def handler(req):
+        seen["auth"] = req.headers.get("authorization")
+        return sse(chunk(content="ok"))
+
+    await collect(mistral(handler).stream_chat("mistral-small-latest", []))
+    assert seen["auth"] == "Bearer sk-test"
+
+
+async def test_mistral_stream_rejected_key_is_a_readable_error():
+    events = await collect(mistral(lambda req: httpx.Response(401, json={"message": "Unauthorized"})).stream_chat("m", []))
+    assert [e.kind for e in events] == ["error"]
+    assert "Mistral rejected the API key" in events[0].text
+
+
+async def test_mistral_stream_unreachable_names_mistral_not_lm_studio():
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    events = await collect(mistral(handler).stream_chat("m", []))
+    assert "Cannot reach Mistral" in events[0].text
+    assert "LM Studio" not in events[0].text
+
+
+async def test_stream_reads_magistral_thinking_chunks_as_reasoning():
+    thinking = [{"type": "thinking", "thinking": [{"type": "text", "text": "plan "}]}]
+    transition = [{"type": "thinking", "thinking": [{"type": "text", "text": "done"}]}, {"type": "text", "text": "Hel"}]
+    events = await collect(mistral(lambda req: sse(chunk(content=thinking), chunk(content=transition), chunk(content="lo"))).stream_chat("m", []))
+    assert joined(events, "reasoning") == "plan done"
+    assert joined(events, "answer") == "Hello"
+
+
+# ---- split_content ----------------------------------------------------------
+
+
+def test_split_content_passes_plain_strings_through():
+    assert split_content("hi") == ("", "hi")
+    assert split_content(None) == ("", "")
+
+
+def test_split_content_separates_thinking_from_text_chunks():
+    parts = [{"type": "thinking", "thinking": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}, {"type": "text", "text": "c"}]
+    assert split_content(parts) == ("ab", "c")

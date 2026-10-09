@@ -2,6 +2,7 @@ from contextlib import AsyncExitStack
 
 import httpx
 import openai
+import pytest
 from fakes import ScriptedChat, ai, call, make_fetch, make_page
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -15,7 +16,7 @@ MESSAGES = [{"role": "user", "content": "go"}]
 WEB = {URL: make_page(URL, markdown="# Pricing\n\nStarter ten dollars."), OTHER: make_page(OTHER)}
 
 
-def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, max_tokens=100_000, max_pages=30):
+def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, max_tokens=100_000, max_pages=30, provider="LM Studio"):
     pages, rows = [], []
     box = ToolBox(pages=pages, rows=rows, fetch_fn=make_fetch(web if web is not None else WEB), allowed_hosts=set(hosts), max_pages=max_pages)
     model = ScriptedChat(script=list(script))
@@ -28,7 +29,7 @@ def setup(script, *, web=None, hosts=("site.test",), saver=None, max_steps=25, m
         max_context_tokens=max_tokens,
         on_grant=lambda reason: box.grant_pages(),
     )
-    return AgentRunner(agent, max_steps=max_steps, base_url="http://lm.test/v1"), box, model, pages, rows
+    return AgentRunner(agent, max_steps=max_steps, base_url="http://lm.test/v1", provider=provider), box, model, pages, rows
 
 
 async def collect(stream):
@@ -165,6 +166,22 @@ async def test_model_connection_errors_are_reported_and_the_run_can_be_resumed()
     assert events[-1].kind == "error" and "Cannot reach LM Studio at http://lm.test/v1" in events[-1].text
     again = await collect(runner.proceed("t1"))
     assert again[-1].kind == "done" and joined(again, "answer") == "fine now "
+
+
+async def test_errors_name_the_provider_in_use():
+    error = openai.APIConnectionError(request=httpx.Request("POST", "https://api.mistral.ai/v1/chat/completions"))
+    runner, *_ = setup([error], provider="Mistral")
+    events = await collect(runner.run("t1", MESSAGES))
+    assert "Cannot reach Mistral at http://lm.test/v1" in events[-1].text
+    assert "LM Studio" not in events[-1].text
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_rejected_key_is_reported_as_such(status):
+    response = httpx.Response(status, request=httpx.Request("POST", "https://api.mistral.ai/v1/chat/completions"))
+    runner, *_ = setup([openai.AuthenticationError("Unauthorized", response=response, body=None) if status == 401 else openai.PermissionDeniedError("Forbidden", response=response, body=None)], provider="Mistral")
+    events = await collect(runner.run("t1", MESSAGES))
+    assert events[-1].kind == "error" and "Mistral rejected the API key" in events[-1].text
 
 
 async def test_an_empty_model_reply_is_an_error():

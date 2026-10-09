@@ -27,6 +27,11 @@ def make_fetch(web: dict[str, Page], calls: list | None = None):
 class FakeLLM:
     """Stands in for LMStudio in session and UI tests."""
 
+    key = "lmstudio"
+    name = "LM Studio"
+    hosted = False
+    base_url = "http://lm.test/v1"
+
     def __init__(self, events=(), window=100_000, models=None):
         from scraper.llm import ModelInfo  # imported lazily: scraper.llm arrives in Task 5
 

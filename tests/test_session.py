@@ -215,6 +215,79 @@ async def test_prompt_plus_reply_reserve_fits_the_window_even_with_history():
     assert prompt_tokens + CFG.reply_reserve <= 8192
 
 
+# ---- providers --------------------------------------------------------------
+
+
+def two_providers(web=None, **kwargs):
+    local = FakeLLM([Event("answer", "from local")])
+    hosted = FakeLLM([Event("answer", "from hosted")])
+    hosted.key, hosted.name, hosted.hosted, hosted.base_url = "mistral", "Mistral", True, "https://mistral.test/v1"
+    session = Session(CFG, local, make_fetch(web or {}), providers={"lmstudio": local, "mistral": hosted}, **kwargs)
+    return session, local, hosted
+
+
+def test_a_single_client_becomes_a_one_provider_registry():
+    llm = FakeLLM()
+    session = Session(CFG, llm, make_fetch({}))
+    assert session.provider == "lmstudio" and session.llm is llm
+    assert session.providers == {"lmstudio": llm}
+
+
+async def test_switching_provider_changes_which_client_answers():
+    session, local, hosted = two_providers({A: make_page(A)})
+    await session.scrape(A)
+    assert [e.text for e in await ask_all(session)] == ["from local"]
+    await session.set_provider("mistral")
+    assert session.provider == "mistral" and session.llm is hosted
+    assert [e.text for e in await ask_all(session)] == ["from hosted"]
+    assert len(local.calls) == 1 and len(hosted.calls) == 1
+
+
+async def test_an_unknown_provider_is_rejected_and_nothing_changes():
+    session, local, _ = two_providers()
+    with pytest.raises(ValueError, match="Unknown provider"):
+        await session.set_provider("openai")
+    assert session.llm is local
+
+
+async def test_switching_provider_is_refused_while_a_run_or_scrape_is_in_progress():
+    session, local, _ = two_providers()
+    session.busy = True
+    with pytest.raises(SessionBusy):
+        await session.set_provider("mistral")
+    assert session.llm is local
+
+
+async def test_the_default_model_factory_builds_for_the_active_provider():
+    cfg = Config(request_delay=0.0, api_key="sk-test", base_url="http://lm.test:1234/v1", mistral_base_url="https://mistral.test/v1")
+    local, hosted = FakeLLM(), FakeLLM()
+    hosted.key = "mistral"
+    session = Session(cfg, local, make_fetch({}), providers={"lmstudio": local, "mistral": hosted})
+    assert session.model_factory("m").openai_api_base == "http://lm.test:1234/v1"
+    await session.set_provider("mistral")
+    model = session.model_factory("m")
+    assert model.openai_api_base == "https://mistral.test/v1" and model.openai_api_key.get_secret_value() == "sk-test"
+
+
+async def test_a_paused_run_follows_the_provider_it_started_on():
+    model = ScriptedChat(script=[ai("", call("ask_user", "c1", question="Which plan?", options=["A", "B"]))])
+    session, _, _ = two_providers(model_factory=lambda model_id: model)
+    assert (await run_all(session, "pick a plan"))[-1].kind == "needs_input"
+    assert session.resumable and session.pending["question"] == "Which plan?"
+    await session.set_provider("mistral")
+    assert session.foreign_run is session.run and not session.resumable and session.pending is None
+    await session.set_provider("lmstudio")
+    assert session.foreign_run is None and session.resumable and session.pending["question"] == "Which plan?"
+
+
+async def test_agent_errors_name_the_active_providers_endpoint():
+    error = openai.APIConnectionError(request=httpx.Request("POST", "https://mistral.test/v1/chat/completions"))
+    session, _, _ = two_providers(model_factory=lambda model_id: ScriptedChat(script=[error]))
+    await session.set_provider("mistral")
+    events = await run_all(session, "anything")
+    assert "Cannot reach Mistral at https://mistral.test/v1" in events[-1].text
+
+
 # ---- agent runs -------------------------------------------------------------
 
 SITE_A = "https://site.test/a"
@@ -237,6 +310,15 @@ async def resume_all(session, value):
 
 async def proceed_all(session):
     return [event async for event in session.proceed_run()]
+
+
+async def test_agent_errors_name_the_providers_server_not_lm_studio():
+    error = openai.APIConnectionError(request=httpx.Request("POST", "https://api.mistral.ai/v1/chat/completions"))
+    llm = FakeLLM()
+    llm.name = "Mistral"
+    session, _ = agent_session({}, [error], llm=llm)
+    events = await run_all(session, "anything")
+    assert events[-1].kind == "error" and "Cannot reach Mistral" in events[-1].text
 
 
 async def test_agent_fetches_a_page_answers_and_records_the_exchange():
@@ -306,6 +388,32 @@ async def test_the_system_prompt_has_limits_the_untrusted_data_rule_and_existing
     assert "Ten dollars." in system
 
 
+async def test_the_system_prompt_explains_the_fetch_delay_tool():
+    session, model = agent_session({}, [ai("ok")])
+    await run_all(session, "hello")
+    system = model.calls[0]["messages"][0].content
+    assert "set_fetch_delay" in system and "429" in system
+
+
+async def test_a_delay_the_model_sets_is_saved_and_survives_a_restart(tmp_path):
+    script = [ai("", call("set_fetch_delay", "c1", seconds=3, reason="rate limited")), ai("done")]
+    store = SessionStore(tmp_path / "s.db")
+    session, _ = agent_session({}, script, cfg=replace(CFG, request_delay=0.5), store=store)
+    events = await run_all(session, "hello")
+    assert events[-1].kind == "done" and session._toolbox.delay == 3.0
+    assert session.run.delay == 3.0 and store.load_run().delay == 3.0
+    again, _ = agent_session({}, [], cfg=replace(CFG, request_delay=0.5), store=SessionStore(tmp_path / "s.db"))
+    await again.restore()
+    again._prepare(100_000)
+    assert again._toolbox.delay == 3.0
+
+
+async def test_a_new_run_starts_at_the_configured_request_delay():
+    session, _ = agent_session({}, [ai("ok")], cfg=replace(CFG, request_delay=0.5))
+    await run_all(session, "hello")
+    assert session._toolbox.delay == 0.5 and session._toolbox.min_delay == 0.5
+
+
 async def test_rows_persist_note_the_history_and_a_new_scrape_clears_them(tmp_path):
     web = {SITE_A: make_page(SITE_A)}
     rows = [{"name": "Starter", "price": "$10"}, {"name": "Team", "price": "$40"}]
@@ -361,6 +469,41 @@ async def test_a_paused_run_is_restored_and_resumed_after_a_restart(tmp_path):
         events = await resume_all(session, "Team")
         assert events[-1].kind == "done" and len(session.history) == 2
         assert store.load().run.status == "done"
+
+
+async def test_a_run_records_which_provider_it_started_on():
+    session, _ = agent_session({}, [ai("hello")])
+    await run_all(session, "say hello")
+    assert session.run.provider == "LM Studio"
+
+
+async def test_a_run_from_another_provider_is_kept_but_cannot_be_resumed(tmp_path):
+    # Tool-call ids and message shapes differ between providers, so a thread cannot cross over
+    web = {SITE_A: make_page(SITE_A)}
+    script = [ai("", call("ask_user", "c1", question="Which plan?", options=["Starter", "Team"]))]
+    hosted = FakeLLM()
+    hosted.name = "Mistral"
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        session, _ = agent_session(web, script, store=SessionStore(tmp_path / "session.db"), saver=saver, llm=hosted)
+        assert (await run_all(session, "pick a plan"))[-1].kind == "needs_input"
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        store = SessionStore(tmp_path / "session.db")
+        local, _ = agent_session(web, [ai("never")], store=store, saver=saver)
+        await local.restore()
+        assert local.foreign_run is local.run and local.foreign_run.provider == "Mistral"
+        assert not local.resumable and local.pending is None
+        with pytest.raises(RuntimeError, match="Mistral"):
+            await resume_all(local, "Team")
+        with pytest.raises(RuntimeError, match="Mistral"):
+            await proceed_all(local)
+        assert store.load_run().status == "paused"  # untouched, so switching back still works
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        back, _ = agent_session(web, [ai("Team it is")], store=SessionStore(tmp_path / "session.db"), saver=saver, llm=hosted)
+        await back.restore()
+        assert back.foreign_run is None and back.resumable and back.pending["question"] == "Which plan?"
 
 
 async def test_a_run_cut_off_mid_stream_is_found_stopped_after_a_restart_and_proceeds(tmp_path):
@@ -536,3 +679,42 @@ async def test_a_granted_page_allowance_survives_a_restart(tmp_path):
     assert again._toolbox.max_pages == 2
     again._toolbox.grant_pages()
     assert again._toolbox.max_pages == 3  # the original allowance of 1 is still what a grant adds
+
+
+async def test_the_chosen_model_is_remembered_per_provider_and_survives_a_new_session(tmp_path):
+    local, hosted = FakeLLM(), FakeLLM()
+    hosted.key, hosted.name = "mistral", "Mistral"
+    store = SessionStore(tmp_path / "s.db")
+    session = Session(CFG, local, make_fetch({}), store=store, providers={"lmstudio": local, "mistral": hosted})
+    assert session.preferred_model is None
+    session.remember_model("qwen-a")
+    await session.set_provider("mistral")
+    assert session.preferred_model is None
+    session.remember_model("mistral-small")
+    await session.new_session()
+
+    again = Session(CFG, local, make_fetch({}), store=SessionStore(tmp_path / "s.db"), providers={"lmstudio": local, "mistral": hosted})
+    assert again.preferred_model == "qwen-a"
+    assert store.get_pref("provider") == "mistral"
+    await again.set_provider("mistral")
+    assert again.preferred_model == "mistral-small"
+
+
+def test_remembering_a_model_without_a_store_is_a_no_op():
+    session = Session(CFG, FakeLLM(), make_fetch({}))
+    session.remember_model("qwen-a")
+    assert session.preferred_model is None
+
+
+def test_settings_are_remembered_across_restarts_and_default_when_unset(tmp_path):
+    session = Session(CFG, FakeLLM(), make_fetch({}), store=SessionStore(tmp_path / "s.db"))
+    assert session.setting("url", "") == ""
+    session.set_setting("url", "https://site.test/a")
+    again = Session(CFG, FakeLLM(), make_fetch({}), store=SessionStore(tmp_path / "s.db"))
+    assert again.setting("url", "") == "https://site.test/a"
+
+
+def test_settings_without_a_store_fall_back_to_the_default():
+    session = Session(CFG, FakeLLM(), make_fetch({}))
+    session.set_setting("url", "x")
+    assert session.setting("url", "dflt") == "dflt"

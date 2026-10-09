@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, reasoning TEXT NOT NULL,
     sources TEXT NOT NULL, interrupted INTEGER NOT NULL, note TEXT NOT NULL, trace TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS run (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 RESUMABLE = ("running", "paused", "stopped", "error")
 
@@ -31,6 +32,7 @@ class RunRecord:
     number: int
     instruction: str
     model: str = ""
+    provider: str = ""  # which model server the thread belongs to; "" for runs saved before this field
     system_prompt: str = ""
     seed_url: str = ""
     status: str = "running"
@@ -38,6 +40,7 @@ class RunRecord:
     allowed_hosts: list[str] = field(default_factory=list)
     fetched: int = 0
     max_pages: int = 0
+    delay: float = 0.0  # seconds between fetches the model chose; 0 until it changes it
     fetched_urls: list[str] = field(default_factory=list)
     context_sources: list[str] = field(default_factory=list)
     rows_added: int = 0
@@ -116,6 +119,15 @@ class SessionStore:
             return number
 
         return self._run(work)
+
+    # ---- preferences (kept across new sessions) -------------------------------
+
+    def get_pref(self, key: str) -> str | None:
+        row = self._run(lambda conn: conn.execute("SELECT value FROM prefs WHERE key = ?", (key,)).fetchone())
+        return row[0] if row else None
+
+    def set_pref(self, key: str, value: str) -> None:
+        self._run(lambda conn: conn.execute("INSERT OR REPLACE INTO prefs (key, value) VALUES (?, ?)", (key, value)))
 
     # ---- content -------------------------------------------------------------
 

@@ -1,6 +1,8 @@
 """Agent tools: the ToolBox logic (allowlist, budgets, idempotent fetch) and LangChain tool wrappers."""
 
+import math
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -24,6 +26,7 @@ MODE_ALIASES = {
 }
 MAX_ROWS_PER_CALL = 200
 MAX_LINKS = 200
+MAX_FETCH_DELAY = 30.0
 URL_RE = re.compile(r"https?://[^\s<>()\[\]\"']+", re.IGNORECASE)
 BARE_RE = re.compile(
     r"(?<![\w@/.-])((?:[a-z0-9-]+\.)+[a-z]{2,24}|localhost|(?:\d{1,3}\.){3}\d{1,3})(?=\.?(?:[:/\s,;)\]\"']|$))",
@@ -69,9 +72,15 @@ class ToolBox:
         timeout: float = 20.0,
         fetched: int = 0,
         grant: int | None = None,
+        min_delay: float = 0.0,
+        max_delay: float = MAX_FETCH_DELAY,
+        delay: float = 0.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
         approve_host: Callable[[str], bool] | None = None,
         on_page: Callable[[Page], None] | None = None,
         on_rows: Callable[[list[dict]], None] | None = None,
+        on_delay: Callable[[float], None] | None = None,
     ) -> None:
         self.pages = pages
         self.rows = rows
@@ -84,6 +93,13 @@ class ToolBox:
         self.approve_host = approve_host
         self.on_page = on_page
         self.on_rows = on_rows
+        self.on_delay = on_delay
+        self.min_delay = min_delay
+        self.max_delay = max(min_delay, max_delay)
+        self.delay = min(self.max_delay, max(min_delay, delay))  # the pause kept between two fetches
+        self._clock = clock
+        self._sleep = sleep
+        self._last_fetch: float | None = None
         self._grant = grant if grant is not None else max_pages
         self._done: dict[tuple[str, str], Page] = {}
         self._handlers = {
@@ -92,6 +108,7 @@ class ToolBox:
             "read_page": self._read_page,
             "extract": self._extract,
             "add_rows": self._add_rows,
+            "set_fetch_delay": self._set_fetch_delay,
         }
 
     def grant_pages(self) -> None:
@@ -147,6 +164,25 @@ class ToolBox:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ToolArgError(f"Argument '{key}' must be an integer.")
         return max(low, min(high, value))
+
+    @staticmethod
+    def _seconds(args: dict, key: str) -> float:
+        value = args.get(key)
+        if isinstance(value, str):
+            try:
+                value = float(value)
+            except ValueError:
+                pass
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ToolArgError(f"Argument '{key}' must be a number of seconds, zero or more.")
+        return float(value)
+
+    def _pace(self) -> None:
+        """Wait out what is left of the delay since the previous request ended."""
+        if self._last_fetch is not None and self.delay:
+            remaining = self.delay - (self._clock() - self._last_fetch)
+            if remaining > 0:
+                self._sleep(remaining)
 
     @staticmethod
     def _mode(value) -> str:
@@ -218,6 +254,7 @@ class ToolBox:
                 limit="pages",
             )
         self.fetched += 1
+        self._pace()
         try:
             page = self.fetch_fn(url, mode, timeout=self.timeout)
         except FetchError as exc:
@@ -227,6 +264,8 @@ class ToolBox:
             if exc.retry_mode and exc.retry_mode != mode:
                 text += f" Retry with mode='{exc.retry_mode}'."
             return self._error(text)
+        finally:
+            self._last_fetch = self._clock()
         if host_of(page.url) not in self.allowed_hosts:
             return self._error(
                 f"{url} redirected to {page.url}, which is not an allowed site, so it was discarded. "
@@ -283,6 +322,18 @@ class ToolBox:
         shown = values[:limit]
         lines = [f"{i}. {value}" for i, value in enumerate(shown, 1)]
         return self._ok(f"{len(values)} match(es) for {selector!r} on {page.url}; showing {len(shown)}:\n" + "\n".join(lines))
+
+    def _set_fetch_delay(self, args: dict) -> ToolResult:
+        wanted = self._seconds(args, "seconds")
+        self.delay = min(self.max_delay, max(self.min_delay, wanted))
+        if self.on_delay:
+            self.on_delay(self.delay)
+        text = f"Fetch delay is now {self.delay:g}s between requests."
+        if wanted < self.min_delay:
+            text += f" That is the minimum allowed; {wanted:g}s is too fast."
+        elif wanted > self.max_delay:
+            text += f" That is the maximum allowed; {wanted:g}s is too slow."
+        return self._ok(text)
 
     def _add_rows(self, args: dict) -> ToolResult:
         rows = args.get("rows")
@@ -386,6 +437,16 @@ def build_tools(box: ToolBox) -> list:
         return run("add_rows", {"rows": rows})
 
     @tool(response_format="content_and_artifact", parse_docstring=True)
+    def set_fetch_delay(seconds: float, reason: str | None = None) -> tuple[str, dict]:
+        """Set the pause between page fetches. Raise it when a site answers 429, times out or blocks you; it cannot go below the user's minimum.
+
+        Args:
+            seconds: Seconds to wait between requests, for example 2.
+            reason: Short note on why, shown to the user.
+        """
+        return run("set_fetch_delay", {"seconds": seconds, "reason": reason})
+
+    @tool(response_format="content_and_artifact", parse_docstring=True)
     def ask_user(question: str, options: list[str] | None = None) -> tuple[str, dict]:
         """Ask the human a question and wait for the answer. Use it when the instruction is ambiguous, a login or CAPTCHA blocks the page, every fetch mode failed, or a choice changes the outcome.
 
@@ -396,4 +457,4 @@ def build_tools(box: ToolBox) -> list:
         answer = interrupt({"kind": "ask", "question": question, "options": list(options or [])})
         return f"The user answered: {answer}", {"ok": True, "rows_added": 0, "fetched": [], "limit": None}
 
-    return [fetch_page, list_links, read_page, extract, add_rows, ask_user]
+    return [fetch_page, list_links, read_page, extract, add_rows, set_fetch_delay, ask_user]

@@ -69,18 +69,21 @@ def _plain(content) -> str:
     return "".join(block.get("text", "") for block in content if isinstance(block, dict))
 
 
-def describe_error(exc: Exception, base_url: str) -> str:
+def describe_error(exc: Exception, base_url: str, provider: str = "LM Studio") -> str:
     if isinstance(exc, openai.APIStatusError):
-        return f"LM Studio rejected the request ({exc.status_code}): {exc.message}"
+        if exc.status_code in (401, 403):
+            return f"{provider} rejected the API key. Check SCRAPER_API_KEY."
+        return f"{provider} rejected the request ({exc.status_code}): {exc.message}"
     if isinstance(exc, (openai.APIConnectionError, httpx.HTTPError)):
-        return f"Cannot reach LM Studio at {base_url}"
+        return f"Cannot reach {provider} at {base_url}"
     return f"{type(exc).__name__}: {exc}"
 
 
 class AgentRunner:
-    def __init__(self, agent, *, max_steps: int, base_url: str = "") -> None:
+    def __init__(self, agent, *, max_steps: int, base_url: str = "", provider: str = "LM Studio") -> None:
         self.agent = agent
         self.base_url = base_url
+        self.provider = provider
         self.recursion_limit = max_steps * 4 + 25
 
     def _config(self, thread_id: str) -> dict:
@@ -122,7 +125,7 @@ class AgentRunner:
                 return
             yield await self._terminal(config)
         except Exception as exc:  # any failure ends the stream with an event; the thread stays resumable
-            yield AgentEvent("error", describe_error(exc, self.base_url))
+            yield AgentEvent("error", describe_error(exc, self.base_url, self.provider))
 
     def _map(self, mode: str, chunk):
         if mode == "messages":

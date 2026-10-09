@@ -4,7 +4,7 @@ import json
 import httpx
 from langchain_openai import ChatOpenAI
 
-from scraper.chat_model import LMStudioChat, make_chat_model
+from scraper.chat_model import ReasoningChat, make_chat_model
 from scraper.config import Config
 
 
@@ -23,7 +23,7 @@ def make_model(*payloads):
         body = "".join(f"data: {json.dumps(p)}\n\n" for p in payloads) + "data: [DONE]\n\n"
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
-    return LMStudioChat(
+    return ReasoningChat(
         model="m",
         base_url="http://lm.test/v1",
         api_key="x",
@@ -66,3 +66,29 @@ def test_make_chat_model_points_at_lm_studio():
     assert model.model_name == "qwen-test"
     assert model.openai_api_base == "http://lm.test:1234/v1"
     assert model.streaming is True
+
+
+async def test_magistral_thinking_chunks_become_reasoning_and_the_answer_stays_text():
+    thinking = [{"type": "thinking", "thinking": [{"type": "text", "text": "plan "}]}]
+    transition = [{"type": "thinking", "thinking": [{"type": "text", "text": "done"}]}, {"type": "text", "text": "Hel"}]
+    reasoning, text, _ = await collect(make_model(chunk(content=thinking), chunk(content=transition), chunk(content="lo")))
+    assert reasoning == "plan done"
+    assert text == "Hello"
+
+
+def test_make_chat_model_for_mistral_uses_its_own_endpoint_and_key():
+    cfg = Config(api_key="sk-test", base_url="http://lm.test:1234/v1", mistral_base_url="https://mistral.test/v1")
+    model = make_chat_model(cfg, "mistral-small-latest", "mistral")
+    assert isinstance(model, ReasoningChat)
+    assert model.openai_api_base == "https://mistral.test/v1"
+    assert model.openai_api_key.get_secret_value() == "sk-test"
+
+
+def test_the_provider_argument_wins_over_the_configured_start_provider():
+    cfg = Config(provider="mistral", api_key="sk-test")
+    assert make_chat_model(cfg, "qwen-test", "lmstudio").openai_api_key.get_secret_value() == "lm-studio"
+
+
+def test_make_chat_model_for_lm_studio_still_uses_the_placeholder_key():
+    model = make_chat_model(Config(), "qwen-test")
+    assert model.openai_api_key.get_secret_value() == "lm-studio"

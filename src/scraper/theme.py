@@ -21,6 +21,7 @@ CSS = """
   --pc-blue: #7FA6C9;
   --pc-mark: #E6D04A;
   --pc-bad: #D9564E;
+  --pc-warn: #E0A84A;
   --pc-ok: #7FBF8E;
   --pc-serif: %(serif)s;
   --pc-sans: %(sans)s;
@@ -77,6 +78,7 @@ body, body.body--dark, .q-page, .q-layout { background: var(--pc-board) !importa
 .pc-notice-hint { color: var(--pc-muted); font-size: 0.88rem; }
 .pc-footer { background: var(--pc-board) !important; border-top: 1px solid var(--pc-rule); color: var(--pc-muted); }
 .pc-dot { font-size: 0.7rem; }
+.pc-hosted { border: 1px solid var(--pc-warn); color: var(--pc-warn); border-radius: 4px; padding: 0.1rem 0.5rem; font-size: 0.8rem; }
 .pc-dot--ok { color: var(--pc-ok); }
 .pc-dot--bad { color: var(--pc-bad); }
 
