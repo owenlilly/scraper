@@ -1,3 +1,9 @@
+import json
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import Field
 from scraper.fetch import FetchError, Page
 
 
@@ -39,3 +45,49 @@ class FakeLLM:
         self.calls.append(messages)
         for event in self.events:
             yield event
+
+
+def call(name, id="c1", **args):
+    return {"name": name, "args": args, "id": id, "type": "tool_call"}
+
+
+def ai(content="", *calls, reasoning=None):
+    extra = {"reasoning_content": reasoning} if reasoning else {}
+    return AIMessage(content=content, tool_calls=list(calls), additional_kwargs=extra)
+
+
+class ScriptedChat(BaseChatModel):
+    """Replays scripted AIMessages and records what it was asked, for driving real agent graphs."""
+
+    script: list = Field(default_factory=list)
+    calls: list = Field(default_factory=list)
+    bound: list = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self.model_copy(update={"bound": [getattr(t, "name", str(t)) for t in tools]})
+
+    def _next(self, messages):
+        self.calls.append({"messages": list(messages), "tools": list(self.bound)})
+        return self.script.pop(0) if self.script else AIMessage(content="(script exhausted)")
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        return ChatResult(generations=[ChatGeneration(message=self._next(messages))])
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        message = self._next(messages)
+        yield ChatGenerationChunk(message=AIMessageChunk(content=""))
+        for word in message.content.split(" ") if message.content else []:
+            yield ChatGenerationChunk(message=AIMessageChunk(content=word + " "))
+        reasoning = message.additional_kwargs.get("reasoning_content")
+        if reasoning:
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", additional_kwargs={"reasoning_content": reasoning}))
+        if message.tool_calls:
+            chunks = [
+                {"name": c["name"], "args": json.dumps(c["args"]), "id": c["id"], "index": i}
+                for i, c in enumerate(message.tool_calls)
+            ]
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=chunks))
