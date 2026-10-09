@@ -116,6 +116,7 @@ AGENT_CSS = """
 .pc-queued { padding: 0 1.25rem; max-width: 76ch; }
 .pc-chat .pc-queued-msg .q-message-text { background: transparent !important; border: 1px dashed var(--pc-blue); }
 .pc-queued-note { font-family: var(--pc-sans); font-size: 0.75rem; color: var(--pc-muted); }
+.pc-chat .pc-queued-msg .q-message-text:has(.pc-queued-note) { border: 0; min-height: 0; padding: 0 0 0 0.2rem; }
 .pc-results { padding: 0.25rem 1.25rem; max-width: 76ch; }
 .pc-table { background: var(--pc-paper); max-height: 14rem; }
 .pc-left, .pc-right { height: calc(100vh - 8.6rem); flex-wrap: nowrap; }
