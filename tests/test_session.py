@@ -11,8 +11,9 @@ from scraper.config import Config
 from scraper.context import estimate_tokens
 from scraper.fetch import FetchError
 from scraper.llm import Event
-from scraper.session import SYSTEM_PROMPT, Message, Session
+from scraper.session import SYSTEM_PROMPT, Message, Session, SessionBusy
 from scraper.store import SessionStore
+from scraper.tools import host_of
 
 A, B, C = "https://site.test/a", "https://site.test/b", "https://site.test/c"
 CFG = Config(request_delay=0.0)
@@ -398,7 +399,7 @@ async def test_a_model_connection_error_leaves_the_run_resumable():
 
 async def test_a_context_limit_ends_the_run_without_recording_history():
     session, _ = agent_session({}, [ai("never")], cfg=replace(CFG, context_fraction=0.001, reply_reserve=0))
-    events = await run_all(session, "x" * 4000)
+    events = await run_all(session, "x" * 8000)
     assert events[-1].kind == "limit" and events[-1].text == "context"
     assert session.history == [] and session.run.status == "ended" and not session.resumable
 
@@ -437,3 +438,87 @@ async def test_agent_prompt_plus_reply_reserve_fits_the_window_even_with_history
         await run_all(session, f"lorem q{n}")
     prompt_tokens = sum(estimate_tokens(m.content) for m in model.calls[-1]["messages"])
     assert prompt_tokens + CFG.reply_reserve <= 8192
+
+
+async def test_two_pauses_in_one_step_are_answered_in_turn_through_the_session():
+    # Review: parallel tool calls pause twice at once; each answer must reach its own question
+    a, b = "https://a.test/x", "https://b.test/y"
+    web = {SITE_A: make_page(SITE_A), a: make_page(a), b: make_page(b)}
+    script = [ai("", call("fetch_page", "c1", url=a), call("fetch_page", "c2", url=b)), ai("done")]
+    session, _ = agent_session(web, script)
+    events = await run_all(session, f"Look at {SITE_A}")
+    asked = []
+    while session.pending is not None:
+        asked.append(session.pending["host"])
+        events = await resume_all(session, {"allow": len(asked) == 1})
+    assert events[-1].kind == "done" and sorted(asked) == ["a.test", "b.test"]
+    assert [host_of(page.url) for page in session.pages] == [asked[0]]
+
+
+async def test_an_empty_final_answer_ends_the_run_and_offers_no_resume():
+    # Review Focus 8: never offer a Resume that cannot work
+    session, _ = agent_session({}, [ai("")])
+    events = await run_all(session, "do it")
+    assert events[-1].kind == "error"
+    assert session.run.status == "ended" and not session.resumable
+
+
+async def test_a_second_run_while_one_is_active_is_refused_and_the_guard_clears_afterwards():
+    # two browser tabs share one Session
+    web = {SITE_A: make_page(SITE_A)}
+    session, model = agent_session(web, [ai("", call("fetch_page", "c1", url=SITE_A)), ai("finished")])
+    stream = session.run_agent(f"read {SITE_A}", "qwen-test")
+    await anext(stream)
+    with pytest.raises(SessionBusy):
+        await agent_events_list(session, "another instruction")
+    with pytest.raises(SessionBusy):
+        await session.scrape(SITE_A)
+    with pytest.raises(SessionBusy):
+        await session.new_session()
+    await stream.aclose()
+    model.script[:] = [ai("fine")]
+    events = await run_all(session, "now it works")
+    assert events[-1].kind == "done"
+
+
+async def agent_events_list(session, instruction):
+    return [event async for event in session.run_agent(instruction, "qwen-test")]
+
+
+async def test_system_prompt_and_messages_together_fit_the_window():
+    filler = "lorem ipsum dolor sit amet " * 110
+    big = "".join(f"# S{k}\n\n{filler}\n\n" for k in range(6))
+    urls = [f"https://site.test/p{n}" for n in range(3)]
+    web = {SITE_A: make_page(SITE_A, markdown=big), **{u: make_page(u, markdown=big) for u in urls}}
+    script = [ai("", call("fetch_page", f"c{n}", url=u)) for n, u in enumerate(urls)] + [ai("done")]
+    session, model = agent_session(web, script, llm=FakeLLM(window=8192))
+    await session.scrape(SITE_A)
+    await run_all(session, "lorem")
+    assert model.calls
+    for model_call in model.calls:
+        total = sum(estimate_tokens(m.content if isinstance(m.content, str) else "") for m in model_call["messages"])
+        assert total + CFG.reply_reserve <= 8192
+
+
+async def test_a_granted_page_allowance_survives_a_restart(tmp_path):
+    urls = [f"https://site.test/p{n}" for n in range(2)]
+    web = {u: make_page(u) for u in urls}
+    script = [
+        ai("", call("fetch_page", "c1", url=urls[0])),
+        ai("", call("fetch_page", "c2", url=urls[1])),  # over the budget of 1: pauses
+        ai("", call("fetch_page", "c3", url=urls[1])),  # after Continue it works
+        ai("done"),
+    ]
+    store = SessionStore(tmp_path / "s.db")
+    session, _ = agent_session(web, script, cfg=replace(CFG, agent_max_pages=1), store=store)
+    events = await run_all(session, f"Look at {urls[0]} and {urls[1]}")
+    assert events[-1].kind == "needs_input" and session.pending["reason"] == "pages"
+    events = await resume_all(session, {"action": "continue"})
+    assert events[-1].kind == "done" and session.run.max_pages == 2
+    assert store.load_run().max_pages == 2
+    again, _ = agent_session(web, [], cfg=replace(CFG, agent_max_pages=1), store=SessionStore(tmp_path / "s.db"))
+    await again.restore()
+    again._prepare(100_000)
+    assert again._toolbox.max_pages == 2
+    again._toolbox.grant_pages()
+    assert again._toolbox.max_pages == 3  # the original allowance of 1 is still what a grant adds

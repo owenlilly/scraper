@@ -1,6 +1,6 @@
 from fakes import ScriptedChat, ai, call
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -145,3 +145,23 @@ async def test_a_conversation_that_cannot_be_trimmed_to_fit_ends_with_a_context_
     agent, model = build([ai("never")], max_tokens=100)
     _, state = await drive(agent, first("y" * 4000))
     assert state.values["end_reason"] == "context" and model.calls == []
+
+
+def bad_call(n):
+    error = {"name": "probe", "args": "not json at all", "id": f"c{n}", "error": "bad", "type": "invalid_tool_call"}
+    return AIMessage(content="", invalid_tool_calls=[error])
+
+
+async def test_invalid_tool_call_json_is_sent_back_to_the_model_to_correct():
+    # Review Focus 1: create_agent would otherwise treat it as an empty final answer
+    agent, model = build([bad_call(1), ai("", call("probe", "c2", url="a")), ai("fixed")])
+    _, state = await drive(agent, first())
+    assert state.values["messages"][-1].content == "fixed" and probed == ["a"]
+    humans = [m.content for m in model.calls[1]["messages"] if isinstance(m, HumanMessage)]
+    assert any("not valid JSON" in text for text in humans)
+
+
+async def test_repeated_invalid_tool_calls_stop_instead_of_looping():
+    agent, model = build([bad_call(n) for n in range(1, 6)])
+    _, state = await drive(agent, first())
+    assert state.next == () and len(model.calls) == 3  # the first call plus two corrections, then it gives up

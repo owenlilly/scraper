@@ -3,10 +3,11 @@ from contextlib import AsyncExitStack
 import httpx
 import openai
 from fakes import ScriptedChat, ai, call, make_fetch, make_page
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from scraper.agent import AgentRunner, build_agent, open_checkpointer
-from scraper.tools import ToolBox, build_tools
+from scraper.tools import ToolBox, build_tools, host_of
 
 URL = "https://site.test/pricing"
 OTHER = "https://other.test/x"
@@ -93,7 +94,9 @@ async def test_ask_user_pauses_and_resuming_with_an_answer_finishes():
     runner, *_ = setup(script)
     events = await collect(runner.run("t1", MESSAGES))
     assert events[-1].kind == "needs_input"
-    assert events[-1].payload == {"kind": "ask", "question": "Which plan?", "options": ["Starter", "Team"]}
+    payload = dict(events[-1].payload)
+    assert payload.pop("interrupt_id")
+    assert payload == {"kind": "ask", "question": "Which plan?", "options": ["Starter", "Team"]}
     assert (await runner.pending("t1"))["kind"] == "ask"
     resumed = await collect(runner.resume("t1", "Team"))
     result = next(e for e in resumed if e.kind == "tool_result")
@@ -117,7 +120,7 @@ async def test_site_approval_allow_fetches_and_deny_refuses():
 
 
 async def test_resuming_re_runs_the_tool_step_without_duplicating_work():
-    # Review Focus 2: the site pause re-runs the whole tools node, including the sibling add_rows call
+    # Review Focus 2: tools are idempotent, so re-running one after a pause, a crash or a Stop never duplicates work
     rows = [{"name": "Starter"}]
     script = [ai("", call("add_rows", "c1", rows=rows), call("fetch_page", "c2", url=OTHER)), ai("ok")]
     runner, box, _, pages, table = setup(script)
@@ -221,3 +224,48 @@ async def test_a_missing_data_directory_is_created_for_the_checkpoint_file(tmp_p
     async with AsyncExitStack() as stack:
         await open_checkpointer(tmp_path / "new" / "checkpoints.db", stack)
     assert (tmp_path / "new" / "checkpoints.db").exists()
+
+
+def last_pause(events):
+    """The pending question of a stream. Not simply the last event: LangGraph may emit a sibling tool result after it."""
+    return next((e for e in reversed(events) if e.kind == "needs_input"), None)
+
+
+async def test_two_pauses_in_one_step_are_answered_one_at_a_time_by_interrupt_id():
+    # Qwen issues parallel tool calls: two unlisted sites pause at once
+    a, b = "https://a.test/x", "https://b.test/y"
+    web = {a: make_page(a), b: make_page(b)}
+    runner, box, _, pages, _ = setup([ai("", call("fetch_page", "c1", url=a), call("fetch_page", "c2", url=b)), ai("done")], web=web)
+    events = await collect(runner.run("t1", MESSAGES))
+    hosts = []
+    while (pause := last_pause(events)) is not None:
+        hosts.append(pause.payload["host"])
+        events = await collect(runner.resume("t1", {"allow": len(hosts) == 1}, interrupt_id=pause.payload["interrupt_id"]))
+    assert events[-1].kind == "done" and sorted(hosts) == ["a.test", "b.test"]
+    assert [host_of(page.url) for page in pages] == [hosts[0]]  # only the first answer was Allow
+
+
+async def test_a_mixed_ask_and_site_pause_keeps_each_answer_with_its_question():
+    a = "https://a.test/x"
+    script = [ai("", call("ask_user", "c1", question="Which?"), call("fetch_page", "c2", url=a)), ai("done")]
+    runner, box, _, pages, _ = setup(script, web={a: make_page(a)})
+    events = await collect(runner.run("t1", MESSAGES))
+    answers = {"ask": "Team", "site": {"allow": True}}
+    while (pause := last_pause(events)) is not None:
+        events = await collect(runner.resume("t1", answers[pause.payload["kind"]], interrupt_id=pause.payload["interrupt_id"]))
+    tool_results = [e.text for e in events if e.kind == "tool_result"]
+    assert events[-1].kind == "done" and "The user answered: Team" in " ".join(tool_results) and len(pages) == 1
+
+
+async def test_a_final_reply_made_only_of_invalid_tool_calls_is_a_final_error_with_a_clear_message():
+    error = {"name": "fetch_page", "args": "nope", "id": "c1", "error": "bad", "type": "invalid_tool_call"}
+    bad = AIMessage(content="", invalid_tool_calls=[error])
+    runner, *_ = setup([bad, bad, bad, bad])
+    events = await collect(runner.run("t1", MESSAGES))
+    assert events[-1].kind == "error" and "valid JSON" in events[-1].text and events[-1].payload == {"final": True}
+
+
+async def test_an_empty_final_reply_is_marked_final_so_no_resume_is_offered():
+    runner, *_ = setup([ai("")])
+    events = await collect(runner.run("t1", MESSAGES))
+    assert events[-1].kind == "error" and events[-1].payload == {"final": True}

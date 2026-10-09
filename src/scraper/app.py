@@ -11,7 +11,7 @@ from .context import estimate_tokens
 from .exports import rows_to_csv, rows_to_json
 from .fetch import FetchError, Page
 from .llm import LLMUnavailable, ModelInfo
-from .session import Session
+from .session import Session, SessionBusy
 from .theme import apply_theme
 
 MODE_LABELS = {
@@ -235,7 +235,18 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             ).classes("w-full pc-table").props("dense flat")
 
     # ---- scrape --------------------------------------------------------------
+    def has_work_to_lose() -> bool:
+        return bool(session.rows or session.history or waiting_run())
+
     async def do_scrape() -> None:
+        if busy["scrape"] or busy["ask"]:
+            return
+        if has_work_to_lose():
+            scrape_dialog.open()  # a manual scrape replaces the pages, results, chat and any saved run
+            return
+        await run_scrape()
+
+    async def run_scrape() -> None:
         if busy["scrape"] or busy["ask"]:
             return
         raw = url_input.value
@@ -250,9 +261,12 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
                 async def retry(mode=exc.retry_mode) -> None:
                     mode_select.set_value(mode)
-                    await do_scrape()
+                    await run_scrape()
 
             show_notice(exc.message, hint=exc.hint, action=retry, action_label=f"Retry with {exc.retry_mode}" if retry else "Retry")
+            return
+        except SessionBusy as exc:
+            show_notice(str(exc), info=True)
             return
         finally:
             busy["scrape"] = False
@@ -266,7 +280,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
                 async def use_dynamic() -> None:
                     mode_select.set_value("dynamic")
-                    await do_scrape()
+                    await run_scrape()
 
                 show_notice(
                     "This page looks nearly empty.",
@@ -430,7 +444,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                         outcome["error"] = event.text
                     chat_scroll.scroll_to(percent=1.0)
         except Exception as exc:  # surface anything unexpected instead of leaving the UI locked
-            outcome["error"] = f"Unexpected error: {exc}"
+            outcome["error"] = str(exc) if isinstance(exc, SessionBusy) else f"Unexpected error: {exc}"
         stop_waiting()
         if outcome["paused"]:
             turn["step"].set_text("Waiting for your answer")
@@ -492,10 +506,15 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
     async def discard() -> None:
         if busy["ask"]:
             return
-        await session.discard_run()
+        try:
+            await session.discard_run()
+        except SessionBusy as exc:
+            show_notice(str(exc), info=True)
+            return
         turn_state["turn"] = None
         pause_box.clear()
         notice_box.clear()
+        render_history()
         update_controls()
 
     async def send() -> None:
@@ -553,7 +572,11 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         dialog.close()
         if busy["ask"] or busy["scrape"]:
             return
-        await session.new_session()
+        try:
+            await session.new_session()
+        except SessionBusy as exc:
+            show_notice(str(exc), info=True)
+            return
         pause_box.clear()
         notice_box.clear()
         preview.set_content("Scraped text appears here, exactly as the model receives it.")
@@ -567,6 +590,16 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         with ui.row():
             ui.button("Cancel", on_click=dialog.close).props("flat").mark("cancel-new")
             ui.button("Clear everything", on_click=confirm_new_session).mark("confirm-new")
+
+    async def confirm_scrape() -> None:
+        scrape_dialog.close()
+        await run_scrape()
+
+    with ui.dialog() as scrape_dialog, ui.card():
+        ui.label("Scraping this page replaces the current pages, results, chat and any saved run. Continue?")
+        with ui.row():
+            ui.button("Cancel", on_click=scrape_dialog.close).props("flat").mark("cancel-scrape")
+            ui.button("Replace", on_click=confirm_scrape).mark("confirm-scrape")
 
     # ---- wiring --------------------------------------------------------------
     scrape_btn.on_click(do_scrape)

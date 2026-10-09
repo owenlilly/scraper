@@ -11,6 +11,7 @@ from typing_extensions import NotRequired
 from .context import estimate_tokens
 
 REPEAT_LIMIT = 3
+MAX_FORMAT_RETRIES = 2
 KEEP_RECENT_TOOL_RESULTS = 2
 TRIMMED = "[trimmed to save context]"
 LIMIT_ACTIONS = [
@@ -33,6 +34,7 @@ class GuardState(AgentState):
     last_sig: NotRequired[str]
     streak: NotRequired[int]
     end_reason: NotRequired[str]
+    format_retries: NotRequired[int]
 
 
 def _text(message) -> str:
@@ -168,6 +170,24 @@ class RunGuard(AgentMiddleware):
     @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state, runtime):
         return self.before_model(state, runtime)
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """create_agent treats a reply made only of unparseable tool calls as a final answer. Send it back instead."""
+        messages = state["messages"]
+        last = messages[-1] if messages else None
+        if not isinstance(last, AIMessage) or last.tool_calls or not last.invalid_tool_calls:
+            return None
+        used = state.get("format_retries", 0)
+        if used >= MAX_FORMAT_RETRIES:
+            return None
+        problems = "; ".join(f"{c.get('name') or 'a tool'}: {c.get('error') or 'invalid arguments'}" for c in last.invalid_tool_calls)
+        text = f"Your last tool call arguments were not valid JSON ({problems}). Call the tool again with valid JSON arguments."
+        return {"format_retries": used + 1, "jump_to": "model", "messages": [HumanMessage(text)]}
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        return self.after_model(state, runtime)
 
     def wrap_model_call(self, request, handler):
         if request.state.get("wrap_up"):

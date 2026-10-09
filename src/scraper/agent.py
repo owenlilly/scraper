@@ -90,8 +90,10 @@ class AgentRunner:
         async for event in self._stream({"messages": messages}, thread_id):
             yield event
 
-    async def resume(self, thread_id: str, value) -> AsyncIterator[AgentEvent]:
-        async for event in self._stream(Command(resume=value), thread_id):
+    async def resume(self, thread_id: str, value, interrupt_id: str | None = None) -> AsyncIterator[AgentEvent]:
+        # With several pauses pending at once LangGraph needs to know which one this answer belongs to.
+        resume = {interrupt_id: value} if interrupt_id else value
+        async for event in self._stream(Command(resume=resume), thread_id):
             yield event
 
     async def proceed(self, thread_id: str) -> AsyncIterator[AgentEvent]:
@@ -102,7 +104,7 @@ class AgentRunner:
         state = await self.agent.aget_state(self._config(thread_id))
         for task in state.tasks:
             for item in task.interrupts:
-                return dict(item.value)
+                return {**dict(item.value), "interrupt_id": item.id}
         return None
 
     async def delete(self, thread_id: str) -> None:
@@ -134,7 +136,8 @@ class AgentRunner:
                 yield AgentEvent("answer", message.content)
             return
         if "__interrupt__" in chunk:
-            yield AgentEvent("needs_input", payload=dict(chunk["__interrupt__"][0].value))
+            item = chunk["__interrupt__"][0]  # one question at a time; the others come back after this one is answered
+            yield AgentEvent("needs_input", payload={**dict(item.value), "interrupt_id": item.id})
             return
         for node, update in chunk.items():
             if not isinstance(update, dict):
@@ -169,4 +172,11 @@ class AgentRunner:
         final = messages[-1] if messages else None
         if isinstance(final, AIMessage) and not final.tool_calls and _plain(final.content).strip():
             return AgentEvent("done")
-        return AgentEvent("error", "The model returned an empty answer.")
+        final_flag = {"final": True}  # resuming cannot change this: the graph already ended
+        if isinstance(final, AIMessage) and final.invalid_tool_calls and not final.tool_calls:
+            return AgentEvent(
+                "error",
+                "The model sent a tool call that was not valid JSON, so the run ended. Try again or rephrase the instruction.",
+                payload=final_flag,
+            )
+        return AgentEvent("error", "The model returned an empty answer.", payload=final_flag)

@@ -37,6 +37,7 @@ class RunRecord:
     pending: dict | None = None
     allowed_hosts: list[str] = field(default_factory=list)
     fetched: int = 0
+    max_pages: int = 0
     fetched_urls: list[str] = field(default_factory=list)
     context_sources: list[str] = field(default_factory=list)
     rows_added: int = 0

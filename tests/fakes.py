@@ -94,3 +94,9 @@ class ScriptedChat(BaseChatModel):
                 for i, c in enumerate(message.tool_calls)
             ]
             yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=chunks))
+        if message.invalid_tool_calls:
+            chunks = [
+                {"name": c["name"], "args": c["args"], "id": c["id"], "index": i}
+                for i, c in enumerate(message.invalid_tool_calls)
+            ]
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=chunks))

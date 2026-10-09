@@ -68,6 +68,7 @@ class ToolBox:
         result_tokens: int = 3000,
         timeout: float = 20.0,
         fetched: int = 0,
+        grant: int | None = None,
         approve_host: Callable[[str], bool] | None = None,
         on_page: Callable[[Page], None] | None = None,
         on_rows: Callable[[list[dict]], None] | None = None,
@@ -83,7 +84,7 @@ class ToolBox:
         self.approve_host = approve_host
         self.on_page = on_page
         self.on_rows = on_rows
-        self._grant = max_pages
+        self._grant = grant if grant is not None else max_pages
         self._done: dict[tuple[str, str], Page] = {}
         self._handlers = {
             "fetch_page": self._fetch_page,

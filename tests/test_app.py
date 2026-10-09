@@ -385,6 +385,9 @@ async def test_a_new_manual_scrape_clears_the_results_table(user: User):
     await user.should_see("Results: 1 row(s)")
     user.find(marker="url").type(SITE)
     user.find(marker="scrape").click()
+    await user.should_see(marker="confirm-scrape")  # results exist, so ask before replacing them
+    assert session.rows == [{"a": 1}]
+    user.find(marker="confirm-scrape").click()
     await user.should_not_see("Download CSV")
     assert session.rows == []
 
@@ -395,5 +398,21 @@ async def test_a_context_limit_shows_a_notice_that_explains_it(user: User):
     register_page(FakeLLM(), session)
     await user.open("/")
     await user.should_see("LM Studio connected")
-    await send_instruction(user, "x" * 4000)
+    await send_instruction(user, "x" * 8000)
     await user.should_see("no longer fits the model's context window")
+
+
+async def test_cancelling_the_scrape_confirmation_keeps_everything(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    session, _ = agent_session(web, [ai("", call("add_rows", "c1", rows=[{"a": 1}])), ai("Added.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Collect from {SITE}")
+    await user.should_see("Results: 1 row(s)")
+    user.find(marker="url").type(SITE)
+    user.find(marker="scrape").click()
+    await user.should_see(marker="cancel-scrape")
+    user.find(marker="cancel-scrape").click()
+    await user.should_see("Results: 1 row(s)")
+    assert session.rows == [{"a": 1}]
