@@ -314,6 +314,11 @@ class Session:
         window = await self.llm.context_length(model)
         history, history_tokens = self._recent_history(self.cfg.history_reserve)
         system = agent_system_prompt(self.cfg)
+        if seed_url:
+            system += (
+                f"\n\nThe user has typed this address in the URL bar: {seed_url}\n"
+                "Unless the instruction names a different site, it is the page to scrape: start with fetch_page on it."
+            )
         fixed = ctx.estimate_tokens(system) + ctx.estimate_tokens(instruction)
         budget = max(200, int(window * self.cfg.context_fraction) - self.cfg.reply_reserve - history_tokens - fixed)
         context = ctx.build(self.pages, instruction, budget)

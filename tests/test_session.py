@@ -281,6 +281,20 @@ async def test_stored_pages_and_the_url_bar_seed_widen_the_allowlist_without_a_p
     assert [e.ok for e in events if e.kind == "tool_result"] == [True, True] and events[-1].kind == "done"
 
 
+async def test_the_url_bar_link_is_given_to_the_model_as_the_page_to_scrape():
+    session, model = agent_session({SITE_A: make_page(SITE_A)}, [ai("ok")])
+    await run_all(session, "what do the plans cost?", seed_url=SITE_A)
+    system = model.calls[0]["messages"][0].content
+    assert SITE_A in system and "URL bar" in system
+    assert SITE_A in session.run.system_prompt  # kept, so a resume or restart still knows it
+
+
+async def test_without_a_url_bar_link_the_prompt_mentions_no_link():
+    session, model = agent_session({}, [ai("ok")])
+    await run_all(session, "hello")
+    assert "URL bar" not in model.calls[0]["messages"][0].content
+
+
 async def test_the_system_prompt_has_limits_the_untrusted_data_rule_and_existing_page_context():
     web = {SITE_A: make_page(SITE_A, markdown="# P\n\nTen dollars.")}
     session, model = agent_session(web, [ai("ok")])
