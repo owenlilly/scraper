@@ -1,5 +1,8 @@
 """NiceGUI front end. Renders Session state and forwards user actions; no business logic."""
 
+from collections import deque
+from contextlib import aclosing
+
 from nicegui import ui
 
 from .config import Config
@@ -14,13 +17,38 @@ MODE_LABELS = {
     "dynamic": "Dynamic (browser)",
     "stealthy": "Stealthy (anti-bot)",
 }
+LIMIT_MESSAGES = {
+    "stopped": "Stopped.",
+    "context": "The conversation no longer fits the model's context window, so the run ended. Try a narrower instruction.",
+}
+
+
+def describe_call(name: str, args: dict) -> str:
+    url = args.get("url", "")
+    if name == "fetch_page":
+        return f"Fetching {url}" + (f" ({args['mode']})" if args.get("mode") else "")
+    if name == "list_links":
+        return f"Listing links on {url}"
+    if name == "read_page":
+        return f"Reading {url}"
+    if name == "extract":
+        return f"Extracting {args.get('selector', '')} from {url}"
+    if name == "add_rows":
+        return f"Adding {len(args.get('rows') or [])} row(s)"
+    if name == "ask_user":
+        return "Asking you a question"
+    return name
+
+
+def shorten(text: str, limit: int = 1500) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "\n[shortened]"
 
 
 def build_ui(cfg: Config, llm, session: Session) -> None:
     apply_theme()
     ui.dark_mode(True)
     models: dict[str, ModelInfo] = {}
-    busy = {"scrape": False, "ask": False}
+    busy = {"scrape": False, "ask": False, "agent": False}
 
     # ---- top bar -------------------------------------------------------------
     with ui.header(elevated=False).classes("items-center gap-3 px-4 py-2 pc-header"):
@@ -56,9 +84,13 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         with split.after:
             with ui.scroll_area().classes("w-full h-[calc(100vh-20rem)] min-h-[14rem]") as chat_scroll:
                 chat_box = ui.column().classes("w-full gap-2 pc-chat")
+            pause_box = ui.column().classes("w-full pc-pause")
             with ui.row().classes("w-full items-center pc-compose"):
-                question = ui.input(placeholder="Ask about this page").props("outlined dense").classes("grow").mark("question")
-                send_btn = ui.button(icon="send").mark("send")
+                agent_switch = ui.switch("Agent", value=True).props("dense").mark("agent")
+                question = ui.input().props("outlined dense").classes("grow").mark("question")
+                send_btn = ui.button(icon="send").props('aria-label="Send"').mark("send")
+                stop_btn = ui.button(icon="stop").props('flat color=negative aria-label="Stop"').mark("stop")
+                stop_btn.set_visibility(False)
 
     # ---- footer --------------------------------------------------------------
     with ui.footer().classes("items-center gap-3 px-4 py-1 pc-footer"):
@@ -69,13 +101,20 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
     # ---- helpers -------------------------------------------------------------
     def update_controls() -> None:
-        scraping, asking = busy["scrape"], busy["ask"]
-        scrape_btn.set_enabled(not scraping and not asking)
+        scraping, asking, running = busy["scrape"], busy["ask"], busy["agent"]
+        paused = session.pending is not None
+        agent_on = bool(agent_switch.value)
+        scrape_btn.set_enabled(not scraping and not asking and not paused)
         cancel_btn.set_visibility(scraping and bool(follow.value))
         progress.set_visibility(scraping)
         ticker.active = scraping
-        send_btn.set_enabled(bool(session.pages) and bool(model_select.value) and not scraping and not asking)
-        question.set_enabled(not asking)
+        send_btn.set_visibility(not running)
+        stop_btn.set_visibility(running)
+        can_ask = bool(model_select.value) and (agent_on or bool(session.pages)) and not scraping and not asking and not paused
+        send_btn.set_enabled(can_ask)
+        question.set_enabled(not asking and not paused)
+        hint = "Tell the agent what to scrape, or ask about the pages" if agent_on else "Ask about this page"
+        question.props(f'placeholder="{hint}"')
 
     def update_progress() -> None:
         done, total = session.progress
@@ -113,31 +152,44 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             for url, why in session.failed:
                 ui.label(f"Could not fetch {url}: {why}").classes("pc-failed")
         if session.last_context:
-            context_label.set_text(
-                f"Last answer used {session.last_context.mode} context from {len(session.last_context.sources)} page(s)"
-            )
+            context_label.set_text(f"Last answer drew on {len(session.last_context.sources)} page(s)")
         else:
             total = sum(estimate_tokens(p.markdown) for p in session.pages)
             context_label.set_text(f"{len(session.pages)} page(s), about {total} tokens" if session.pages else "")
+
+    def add_log_entry(container, name: str, args: dict, text: str | None, ok: bool):
+        icon = "hourglass_empty" if text is None else ("check" if ok else "error_outline")
+        with container:
+            entry = ui.expansion(describe_call(name, args), icon=icon).classes("w-full pc-tool")
+            if text is not None:
+                with entry:
+                    ui.label(shorten(text)).classes("pc-tool-result")
+        return entry
 
     def render_history() -> None:
         chat_box.clear()
         with chat_box:
             if not session.history:
                 ui.label(
-                    "Ask a question about the scraped page." if session.pages else "Enter a URL above and choose Scrape. Then ask anything about the page."
+                    "Tell the agent what to scrape, or ask a question about the pages."
+                    if agent_switch.value
+                    else ("Ask a question about the scraped page." if session.pages else "Enter a URL above and choose Scrape. Then ask anything about the page.")
                 ).classes("pc-empty")
             for message in session.history:
                 if message.role == "user":
                     ui.chat_message(message.content, sent=True, name="You")
                     continue
-                with ui.chat_message(name="Qwen"):
+                with ui.chat_message(name="Agent" if message.trace else "Qwen"):
+                    for entry in message.trace:
+                        add_log_entry(ui.column().classes("w-full gap-1 pc-log"), entry.name, entry.args, entry.text, entry.ok)
                     if message.reasoning:
                         with ui.expansion("Reasoning", icon="psychology").classes("w-full pc-reasoning"):
                             ui.markdown(message.reasoning)
                     ui.markdown(message.content)
                     if message.interrupted:
                         ui.label("Interrupted").classes("pc-interrupted")
+                    if message.note:
+                        ui.label(message.note).classes("pc-cite")
                     if message.sources:
                         ui.label("Based on " + ", ".join(message.sources)).classes("pc-cite")
         chat_scroll.scroll_to(percent=1.0)
@@ -183,7 +235,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                 )
         update_controls()
 
-    # ---- ask -----------------------------------------------------------------
+    # ---- tool-free Q&A (Agent switch off) ------------------------------------
     async def run_ask(text: str) -> None:
         question.set_value("")
         notice_box.clear()
@@ -243,11 +295,148 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             render_history()
             await run_ask(original)
 
+    # ---- the agent -----------------------------------------------------------
+    def show_pause(payload: dict) -> None:
+        pause_box.clear()
+        kind = payload.get("kind")
+        with pause_box, ui.element("div").classes("pc-pause-card"):
+            ui.label(payload.get("question", "The agent needs your input.")).classes("pc-pause-question")
+            note = None
+            if kind in ("ask", "limit"):
+                hint = "Your answer" if kind == "ask" else "Add a note for the agent (optional)"
+                note = ui.input(placeholder=hint).props("outlined dense").classes("w-full").mark("pause-note")
+            with ui.row().classes("items-center"):
+                if kind == "ask":
+                    for option in payload.get("options", []):
+                        ui.button(option, on_click=lambda o=option: answer(o)).mark(f"option:{option}")
+                    ui.button("Send answer", on_click=lambda: answer((note.value or "").strip()) if (note.value or "").strip() else None).props("flat").mark("answer")
+                elif kind == "limit":
+                    for action in payload.get("actions", []):
+                        ui.button(
+                            action["label"],
+                            on_click=lambda a=action["action"]: answer({"action": a, "note": (note.value or "").strip()}),
+                        ).mark(f"action:{action['action']}")
+                elif kind == "site":
+                    ui.button("Allow", on_click=lambda: answer({"allow": True})).mark("allow")
+                    ui.button("Deny", on_click=lambda: answer({"allow": False})).props("flat").mark("deny")
+                ui.button("Discard run", on_click=discard).props("flat").mark("discard")
+        update_controls()
+
+    async def consume(stream) -> dict:
+        """Render one agent stream into a fresh assistant bubble. Returns how it ended."""
+        outcome = {"error": None, "limit": None, "paused": False}
+        with chat_box:
+            with ui.chat_message(name="Agent"):
+                step_label = ui.label("Working...").classes("pc-step")
+                log_box = ui.column().classes("w-full gap-1 pc-log")
+                with ui.expansion("Reasoning", icon="psychology").classes("w-full pc-reasoning") as think_box:
+                    think_md = ui.markdown()
+                answer_md = ui.markdown("Reading...").classes("pc-waiting")
+        think_box.set_visibility(False)
+        reasoning = answer = ""
+        entries: deque = deque()
+        try:
+            async with aclosing(stream) as events:
+                async for event in events:
+                    if event.kind == "step":
+                        reasoning = answer = ""
+                        think_md.set_content("")
+                        think_box.set_visibility(False)
+                        answer_md.classes(remove="pc-waiting")
+                        answer_md.set_content("")
+                        step_label.set_text(f"Step {event.step}")
+                    elif event.kind == "reasoning":
+                        reasoning += event.text
+                        think_box.set_visibility(True)
+                        think_md.set_content(reasoning)
+                    elif event.kind == "answer":
+                        answer += event.text
+                        answer_md.set_content(answer)
+                    elif event.kind == "tool_start":
+                        entries.append(add_log_entry(log_box, event.name, event.args, None, True))
+                    elif event.kind == "tool_result":
+                        if entries:
+                            entry = entries.popleft()
+                            entry.props(f"icon={'check' if event.ok else 'error_outline'}")
+                            with entry:
+                                ui.label(shorten(event.text)).classes("pc-tool-result")
+                        if event.urls:
+                            refresh_sources()
+                    elif event.kind == "needs_input":
+                        outcome["paused"] = True
+                    elif event.kind == "limit":
+                        outcome["limit"] = event.text
+                    elif event.kind == "error":
+                        outcome["error"] = event.text
+                    chat_scroll.scroll_to(percent=1.0)
+        except Exception as exc:  # surface anything unexpected instead of leaving the UI locked
+            outcome["error"] = f"Unexpected error: {exc}"
+        step_label.set_text("Waiting for your answer" if outcome["paused"] else "Finished")
+        return outcome
+
+    async def run_stream(stream) -> None:
+        busy["ask"] = busy["agent"] = True
+        pause_box.clear()
+        notice_box.clear()
+        update_controls()
+        before = len(session.history)
+        outcome = await consume(stream)
+        busy["ask"] = busy["agent"] = False
+        if len(session.history) > before:
+            render_history()  # the run ended with an answer: rebuild with tool traces and sources
+        refresh_sources()
+        update_controls()
+        if outcome["paused"]:
+            show_pause(session.pending)
+        elif outcome["error"]:
+            show_notice(
+                outcome["error"],
+                hint="Your run is saved. Resume continues from the last step." if session.resumable else None,
+                action=proceed if session.resumable else None,
+                action_label="Resume",
+            )
+        elif outcome["limit"]:
+            show_notice(
+                LIMIT_MESSAGES.get(outcome["limit"], outcome["limit"]),
+                hint="Resume continues from the last step." if session.resumable else None,
+                action=proceed if session.resumable else None,
+                action_label="Resume",
+            )
+
+    async def start_agent(text: str) -> None:
+        question.set_value("")
+        if not session.history:
+            chat_box.clear()  # drop the empty-state note
+        with chat_box:
+            ui.chat_message(text, sent=True, name="You")
+        await run_stream(session.run_agent(text, model_select.value, seed_url=(url_input.value or "").strip() or None))
+
+    async def answer(value) -> None:
+        if busy["ask"] or session.pending is None:
+            return
+        await run_stream(session.resume_run(value))
+
+    async def proceed() -> None:
+        if busy["ask"] or busy["scrape"] or not session.resumable:
+            return
+        await run_stream(session.proceed_run())
+
+    async def discard() -> None:
+        if busy["ask"]:
+            return
+        await session.discard_run()
+        pause_box.clear()
+        notice_box.clear()
+        update_controls()
+
     async def send() -> None:
         text = (question.value or "").strip()
-        if not text or busy["ask"] or busy["scrape"] or not session.pages or not model_select.value:
+        if not text or busy["ask"] or busy["scrape"] or not model_select.value or session.pending is not None:
             return
-        await run_ask(text)
+        if agent_switch.value:
+            await start_agent(text)
+        elif session.pages:
+            await run_ask(text)
 
     # ---- models and status ---------------------------------------------------
     def on_model_change() -> None:
@@ -286,7 +475,9 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
     url_input.on("keydown.enter", do_scrape)
     cancel_btn.on_click(session.cancel)
     send_btn.on_click(send)
+    stop_btn.on_click(session.cancel)
     question.on("keydown.enter", send)
+    agent_switch.on_value_change(lambda: (update_controls(), render_history() if not session.history else None))
     model_select.on_value_change(on_model_change)
     ui.timer(0.1, refresh_models, once=True)
     ui.timer(15.0, refresh_models)

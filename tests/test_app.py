@@ -1,10 +1,10 @@
 import asyncio
 
-from fakes import FakeLLM, make_fetch, make_page
+from fakes import FakeLLM, ScriptedChat, ai, call, make_fetch, make_page
 from nicegui import ui
 from nicegui.testing import User
 
-from scraper.app import build_ui
+from scraper.app import build_ui, describe_call, shorten
 from scraper.config import Config
 from scraper.llm import Event
 from scraper.session import Session
@@ -20,6 +20,17 @@ def register_page(llm, session):
         build_ui(cfg, llm, session)
 
 
+def agent_off(user):
+    for element in user.find(marker="agent").elements:
+        element.set_value(False)
+
+
+def agent_session(web, script, *, cfg=None):
+    model = ScriptedChat(script=list(script))
+    session = Session(cfg or Config(request_delay=0.0), FakeLLM(), make_fetch(web), model_factory=lambda model_id: model)
+    return session, model
+
+
 async def test_scrape_then_ask_shows_sources_and_a_streamed_answer(user: User):
     web = {SITE: make_page(SITE, title="Site Title", markdown="# Pricing\n\nTen dollars per month.")}
     llm = FakeLLM([Event("reasoning", "checking the page"), Event("answer", "It costs ten dollars.")])
@@ -27,6 +38,7 @@ async def test_scrape_then_ask_shows_sources_and_a_streamed_answer(user: User):
     register_page(llm, session)
 
     await user.open("/")
+    agent_off(user)
     await user.should_see("Page Chat")
     await user.should_see("LM Studio connected")
 
@@ -46,6 +58,7 @@ async def test_a_failed_scrape_shows_an_inline_notice(user: User):
     register_page(llm, session)
 
     await user.open("/")
+    agent_off(user)
     user.find(marker="url").type(SITE)
     user.find(marker="scrape").click()
     await user.should_see("HTTP 404")
@@ -67,6 +80,7 @@ async def test_an_unexpected_stream_failure_is_shown_and_unlocks_the_composer(us
     register_page(llm, session)
 
     await user.open("/")
+    agent_off(user)
     await user.should_see("LM Studio connected")
     user.find(marker="url").type(SITE)
     user.find(marker="scrape").click()
@@ -92,6 +106,7 @@ async def test_error_after_an_interrupted_answer_is_not_blamed_on_that_answer(us
     register_page(llm, session)
 
     await user.open("/")
+    agent_off(user)
     await user.should_see("LM Studio connected")
     user.find(marker="url").type(SITE)
     user.find(marker="scrape").click()
@@ -106,3 +121,117 @@ async def test_error_after_an_interrupted_answer_is_not_blamed_on_that_answer(us
     user.find(marker="send").click()
     await user.should_see("LM Studio went away")
     await user.should_not_see("The answer was cut off.")
+
+
+# ---- agent UI ---------------------------------------------------------------
+
+OTHER = "https://other.test/x"
+
+
+async def send_instruction(user, text):
+    user.find(marker="question").type(text)
+    user.find(marker="send").click()
+
+
+def test_describe_call_and_shorten():
+    assert describe_call("fetch_page", {"url": "https://a.test/", "mode": "stealthy"}) == "Fetching https://a.test/ (stealthy)"
+    assert describe_call("fetch_page", {"url": "https://a.test/", "mode": None}) == "Fetching https://a.test/"
+    assert describe_call("extract", {"url": "u", "selector": ".price"}) == "Extracting .price from u"
+    assert describe_call("add_rows", {"rows": [{}, {}]}) == "Adding 2 row(s)"
+    assert describe_call("mystery", {}) == "mystery"
+    assert shorten("x" * 2000).endswith("[shortened]") and shorten("short") == "short"
+
+
+async def test_an_agent_run_shows_the_tool_log_and_the_final_answer(user: User):
+    web = {SITE: make_page(SITE, title="Site Title", markdown="# Pricing\n\nTen dollars per month.")}
+    session, _ = agent_session(web, [ai("", call("fetch_page", "c1", url=SITE)), ai("The Starter plan costs ten dollars.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await user.should_not_see(marker="stop")
+    await send_instruction(user, f"Look at {SITE} and tell me the price")
+    await user.should_see(f"Fetching {SITE}")
+    await user.should_see("ten dollars")
+    await user.should_see("Site Title")  # the fetched page joins the page list
+    assert session.run.status == "done" and len(session.history) == 2
+
+
+async def test_ask_user_shows_a_question_card_and_an_option_button_resumes_the_run(user: User):
+    script = [ai("", call("ask_user", "c1", question="Which plan?", options=["Starter", "Team"])), ai("Team costs forty dollars.")]
+    session, _ = agent_session({SITE: make_page(SITE)}, script)
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Price at {SITE}")
+    await user.should_see("Which plan?")
+    user.find(marker="option:Team").click()
+    await user.should_see("Team costs forty dollars.")
+    assert session.run.status == "done"
+
+
+async def test_a_free_text_answer_resumes_an_ask_question(user: User):
+    script = [ai("", call("ask_user", "c1", question="Which plan?")), ai("Noted, the Pro plan.")]
+    session, _ = agent_session({SITE: make_page(SITE)}, script)
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Price at {SITE}")
+    await user.should_see("Which plan?")
+    user.find(marker="pause-note").type("Pro")
+    user.find(marker="answer").click()
+    await user.should_see("Noted, the Pro plan.")
+
+
+async def test_site_approval_card_allow_resumes_and_fetches(user: User):
+    web = {SITE: make_page(SITE), OTHER: make_page(OTHER, title="Other Page")}
+    session, _ = agent_session(web, [ai("", call("fetch_page", "c1", url=OTHER)), ai("Got the other page.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Look at {SITE}")
+    await user.should_see("May I fetch pages from other.test?")
+    user.find(marker="allow").click()
+    await user.should_see("Got the other page.")
+    assert [p.url for p in session.pages] == [OTHER]
+
+
+async def test_a_step_limit_card_offers_continue_wrap_up_and_stop(user: User):
+    web = {SITE: make_page(SITE)}
+    session, _ = agent_session(
+        web, [ai("", call("fetch_page", "c1", url=SITE)), ai("Wrapped up answer.")], cfg=Config(request_delay=0.0, agent_max_steps=1)
+    )
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Look at {SITE}")
+    await user.should_see("I have used 1 of my 1 steps")
+    user.find(marker="action:wrap_up").click()
+    await user.should_see("Wrapped up answer.")
+
+
+async def test_discarding_a_paused_run_unlocks_the_composer(user: User):
+    script = [ai("", call("ask_user", "c1", question="Which plan?"))]
+    session, _ = agent_session({SITE: make_page(SITE)}, script)
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Price at {SITE}")
+    await user.should_see("Which plan?")
+    user.find(marker="discard").click()
+    await user.should_not_see("Which plan?")
+    assert session.run.status == "ended" and session.pending is None
+
+
+async def test_a_model_error_shows_a_notice_with_resume(user: User):
+    import httpx
+    import openai
+
+    error = openai.APIConnectionError(request=httpx.Request("POST", "http://lm.test/v1/chat/completions"))
+    session, _ = agent_session({SITE: make_page(SITE)}, [error, ai("Fine now.")])
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, f"Look at {SITE}")
+    await user.should_see("Cannot reach LM Studio")
+    user.find(kind=ui.button, content="Resume").click()
+    await user.should_see("Fine now.")
