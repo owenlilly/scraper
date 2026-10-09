@@ -1,139 +1,193 @@
-# Scraping Agent: Design
+# Scraping Agent: Design (revision 2)
 
 Date: 2026-10-09
 Builds on: `docs/superpowers/specs/2026-10-09-web-scraper-chat-design.md` (the existing Page Chat app)
+Revision 2 replaces the hand-written agent loop with LangChain `create_agent` on a LangGraph runtime, and adds durable execution and human-in-the-loop pauses.
 
 ## Purpose
 
-Turn Page Chat into an agent. The user gives plain-English instructions about what and how
-to scrape ("go to X, follow the pricing links, collect every plan with its price, use stealthy
+Turn Page Chat into an agent. The user gives plain-English instructions about what and how to
+scrape ("go to X, follow the pricing links, collect every plan with its price, use stealthy
 mode"). A local Qwen model, served by LM Studio, decides which pages to fetch and what to
-extract by calling tools built on the existing fetch, crawl and context code. It reports in
-chat and can also collect structured rows into a table that can be downloaded.
+extract by calling tools built on the existing fetch and context code. It reports in chat and
+can collect structured rows into a table that can be downloaded.
+
+The agent can tell the user when it is stuck or needs a decision: it pauses, shows a question,
+and continues when the user answers. A run survives an app restart and can be resumed.
 
 Success criteria:
 - A multi-step instruction ("scrape these three pages and give me name, price, url for each") completes without further input and yields a correct results table.
 - The user can steer how scraping is done in their instruction (fetch mode, CSS selector, which links to follow, which fields to collect) and the agent honours it.
 - Simple questions about already-scraped pages are still answered directly, with no tool calls.
+- When the agent needs a decision, is blocked, hits a limit, or wants an unlisted site, the run pauses with a clear question and resumes with the user's answer.
+- Closing the app mid-run, or crashing, loses nothing: on launch the session is restored and the run can be resumed from its last step.
 - A run is always bounded (steps, pages, domains) and can be stopped at any time.
-- Failures (blocked pages, bad tool arguments, LM Studio errors) never crash the app and are shown clearly.
+- Failures never crash the app and are shown clearly.
 
 ## Decisions (agreed with the user)
 
 | Topic | Decision |
 |---|---|
 | Output | Chat answer plus an optional structured results table, downloadable as CSV or JSON. |
-| Autonomy | Autonomous within limits: step budget, page budget, domain allowlist, Stop button, live step log. |
-| Structure | One agent chat. The chat box takes instructions; the URL bar is an optional "start here" seed; the agent's tools fetch, list links, read, extract and add rows; follow-up questions reuse gathered pages. |
-| Model | Local Qwen via LM Studio. Verified: the loaded `qwen3.8-27b-uncensored-mlx` returns valid OpenAI-style `tool_calls`. |
-| Persistence | None. Sessions and results live in memory. |
+| Autonomy | Autonomous within limits, with human pauses (see Pauses). Live step log, Stop button. |
+| Structure | One agent chat. The chat box takes instructions; the URL bar is an optional "start here" seed; follow-up questions reuse gathered pages. |
+| Runtime | LangChain `create_agent` on LangGraph, with a SQLite checkpointer. Chosen by the user over a hand-written loop. |
+| Model | Local Qwen via LM Studio through `langchain-openai` `ChatOpenAI` (OpenAI-compatible). |
+| Persistence | One current session persists across restarts: pages, rows, chat history, and any paused or interrupted run. A "New session" button wipes it. |
+| Cloud tracing | Off. LangSmith tracing is forced off at startup so scraped content never leaves the machine. |
+
+## Verified facts (spike, 2026-10-09, scratch environment, Python 3.14.4)
+
+- Installs and runs: `langchain 1.4.4`, `langchain-core 1.6.9`, `langchain-openai 1.7.0`, `langgraph 1.2.14`, `langgraph-checkpoint-sqlite 3.1.1`, with the same `openai 3.27.0` the project already uses.
+- `create_agent` streams tokens and tool calls from the loaded `qwen3.8-27b-uncensored-mlx` through `ChatOpenAI(base_url=http://localhost:1234/v1)`.
+- The stock `ChatOpenAI` drops LM Studio's `delta.reasoning_content`. A subclass overriding `_convert_chunk_to_generation_chunk` to copy it into `message.additional_kwargs["reasoning_content"]` restores it (192 reasoning characters seen). It relies on a private method, so a test must fail loudly if a LangChain upgrade breaks it.
+- A tool that calls `interrupt(payload)` pauses the graph; with `AsyncSqliteSaver` the paused state survives process exit; a fresh process resumed with `Command(resume="Team")` and the run finished.
+- The live model invents argument values the schema does not list (`mode: "stealth"`); tools must normalise them.
+- On resume LangGraph re-runs the whole node that called `interrupt()`. Everything before the interrupt in that node, and every other tool in the same tool step, runs again. Tools must therefore be idempotent.
 
 ## Architecture
 
 ```
 src/scraper/
-  agent.py     the tool loop (new)
-  tools.py     tool schemas + ToolBox executing them against the session (new)
-  llm.py       + stream_step(): streams tokens and assembles tool calls
-  session.py   + rows, agent run, Stop; the chat entry point goes through the agent
-  fetch.py     Page gains `html` (raw HTML for CSS selectors)
-  config.py    + agent limits
-  app.py       instruction box, step log, Stop, results table, downloads
+  chat_model.py  LMStudioChat: ChatOpenAI subclass that keeps reasoning_content (new)
+  tools.py       ToolBox (the tool logic, as before) + build_tools(): LangChain tools incl. ask_user (new)
+  guards.py      agent middleware: run limits with pause, repeat guard, context trim, wrap-up (new)
+  agent.py       build_agent(); AgentRunner: start/resume/stream a run, event mapping (new)
+  store.py       SessionStore: SQLite persistence of pages, rows, history, run record (new)
+  session.py     Session: store, rows, run_agent/resume_run, restore on launch
+  fetch.py       Page gains `html` (raw HTML for CSS selectors)
+  context.py     + view_page (budgeted page view for tool results)
+  exports.py     rows_to_csv, rows_to_json (new)
+  config.py      + agent and data-dir settings
+  app.py         instruction box, step log, pause card, resume banner, results, New session
 ```
 
-`crawl.py` is reused unchanged (it still serves the optional manual scrape). `context.py` is
-reused; it may gain one small helper that returns BM25 excerpts for a single page and a
-focus string, used by the `focus` argument of `fetch_page` and `read_page`.
+`crawl.py` and `llm.py` are unchanged (the tool-free Q&A path, used when the Agent switch is
+off for models without tool calling, still uses `llm.LMStudio.stream_chat`).
 
-### Tools
+### Dependencies
 
-All tool results are text. Errors are returned as text for the model to recover from, never raised.
+Added: `langchain>=1.4,<2`, `langchain-openai>=1.7,<2`, `langgraph>=1.2,<2`,
+`langgraph-checkpoint-sqlite>=3.1,<4` (brings `aiosqlite`). No `langchain-community`, no
+Deep Agents, no LangSmith key.
+
+### `chat_model.py`
+
+`LMStudioChat(ChatOpenAI)` overrides `_convert_chunk_to_generation_chunk`: call `super()`, then
+if the chunk's delta has `reasoning_content`, set it on `generation.message.additional_kwargs`.
+A factory `make_chat_model(cfg, model_id)` builds it with `base_url=cfg.base_url`,
+`api_key="lm-studio"`, `streaming=True`, a long read timeout and `max_retries=0`.
+
+### Tools (`tools.py`)
+
+`ToolBox` keeps the previously specified logic: domain allowlist, page budget, result cap,
+mode normalisation (`stealth` becomes `stealthy`), quoted untrusted page text, errors returned as
+text. `build_tools(box)` wraps it as LangChain tools with `response_format="content_and_artifact"`
+so each result carries `(text, artifact)`, the artifact being `{"ok": bool, "rows_added": int,
+"fetched": [urls], "limit": str | None}` for the UI and guards.
 
 | Tool | Arguments | Behaviour |
 |---|---|---|
-| `fetch_page` | `url`, `mode` (`fast`/`dynamic`/`stealthy`, default `fast`), `focus` (optional) | Domain check, then `fetch.fetch`. Stores the `Page` in the session. Returns title, URL, token count, link count and the text, capped at `tool_result_tokens`. With `focus`, only the BM25-best excerpts for it. |
-| `list_links` | `url`, `contains` (optional), `limit` (default 50) | Links of a stored page, filtered by substring, same-domain flagged. |
-| `read_page` | `url`, `focus` (optional), `max_tokens` (optional) | Re-reads a stored page, or only the parts relevant to `focus`. |
-| `extract` | `url`, `selector`, `attr` (optional), `limit` (default 50) | Scrapling CSS selector on the stored raw HTML; returns matching text or the attribute values. |
-| `add_rows` | `rows`: list of objects | Appends rows to the results table. Columns are the union of keys seen. Non-object rows are rejected with an error message. |
+| `fetch_page` | `url`, `mode` (`fast`/`dynamic`/`stealthy`), `focus` | Domain check; for an unlisted site, pauses with a `site` question (see Pauses); fetches; stores the page; returns a trimmed quoted view. Idempotent: a page already fetched in this run with the same mode is returned from storage without a second fetch or budget charge. |
+| `list_links` | `url`, `contains`, `limit` | Links of a stored page; off-site links marked. |
+| `read_page` | `url`, `focus`, `max_tokens` | Stored page text or the parts relevant to `focus`. |
+| `extract` | `url`, `selector`, `attr`, `limit` | Scrapling CSS selector on stored raw HTML; hrefs made absolute. |
+| `add_rows` | `rows` | Appends objects to the results table; exact duplicates of existing rows are ignored (idempotent). |
+| `ask_user` | `question`, `options` (optional list) | Pauses the run with an `ask` question; returns "The user answered: ..." as the tool result. |
 
-No `finish` tool: a model reply with no tool calls is the final answer.
+### Pauses (human in the loop)
 
-### `llm.stream_step`
+A pause is a LangGraph `interrupt(payload)`; the payload is JSON and the UI shows it as a
+question card. Three kinds:
 
-`stream_step(model, messages, tools) -> AsyncIterator[Event]` extends the existing streaming
-client. It yields `reasoning` and `answer` events as tokens arrive, plus one `tool_calls`
-event at the end of the step carrying the assembled calls (`id`, `name`, parsed `arguments`,
-or an `arguments_error` string when the JSON is malformed). Tool-call fragments arrive split
-across chunks and may include several calls in one step; assembly is keyed by call index.
-The existing `stream_chat` stays for non-agent use and shares the error handling.
+| Kind | Raised by | Payload | Resume value | Effect |
+|---|---|---|---|---|
+| `ask` | the model, via `ask_user` (system prompt: ask when the instruction is ambiguous, a login or CAPTCHA blocks the page, every fetch mode failed, or a choice changes the outcome) | `question`, `options` | the answer text | returned to the model as the tool result |
+| `limit` | run guard middleware when the step limit, the page budget or the repeat guard trips | `reason` (`steps`/`pages`/`repeat`), `question`, `options` | `{"action": "continue" \| "wrap_up" \| "stop", "note": str}` | `continue` grants another allowance and (for `repeat`) tells the model to change approach, `note` is passed to the model; `wrap_up` runs one tool-less final answer step; `stop` ends the run |
+| `site` | `fetch_page` for a host not allowed | `host`, `question` | `{"allow": bool}` | allow adds the host to this run's allowlist and fetches; deny returns a tool error |
 
-### Agent loop (`agent.py`)
+Free-text instructions are always possible: for `ask` the text is the answer; for `limit` it
+goes in `note`.
 
-`Agent.run(instruction, model) -> AsyncIterator[AgentEvent]`:
+### Run limits and guards (`guards.py`)
 
-1. Build messages: system prompt (task framing, untrusted-data rule, limits, the tool list) + page context from the pages already scraped (the existing full-or-BM25 `context.build`) + recent history + the instruction.
-2. Stream one step with `stream_step`. Forward `reasoning` and `answer` tokens.
-3. No tool calls: the answer is final; end the run.
-4. Tool calls: for each in order emit `tool_start`, execute via the ToolBox, emit `tool_result`, append the assistant message (with its `tool_calls`) and one `tool` message per call, then go to step 2.
+Defaults, each configurable: 25 model steps (`SCRAPER_AGENT_MAX_STEPS`), 30 page fetches
+(`SCRAPER_AGENT_MAX_PAGES`), tool results capped at 3000 tokens (`SCRAPER_TOOL_RESULT_TOKENS`).
+Middleware, with counters kept in the graph state so they survive a restart:
+- **Run guard:** before each model call, counts steps; at the limit, raises a `limit` pause. A tool result carrying `limit == "pages"` raises one after the tools step. The same tool call with identical arguments three times in a row raises a `repeat` pause.
+- **Context trim:** when the conversation exceeds `context_fraction` (0.7) of the model's window, old tool results are replaced by `[trimmed to save context]`; if it still does not fit, the run ends with `limit: context`.
+- **Wrap-up:** after a `wrap_up` answer, the next model call runs with no tools and a user message asking for the final answer.
+- **Domain allowlist:** hosts of stored pages, the URL bar seed and hosts or URLs written in the instruction. `www.` equals the bare host. Every fetch, including the post-redirect URL, is checked.
 
-Events: `reasoning`, `answer`, `tool_start`, `tool_result`, `rows_added`, `limit` (which limit was hit), `error`, `done`.
+### Durable execution and persistence
 
-### Limits and safety
+- **Checkpointer:** `AsyncSqliteSaver` on `<data_dir>/checkpoints.db`, opened at app startup and closed at shutdown. Each run is its own thread, `thread_id = f"{session_id}-{run_number}"`, so a run's full message trace is isolated and cleaned up with the session.
+- **Session store (`store.py`):** `<data_dir>/session.db`. Tables: `meta` (session id, run counter), `pages` (url, title, markdown, links, html, looks_empty, position), `rows`, `history` (role, content, reasoning, sources, interrupted, note, trace), `run` (run number, instruction, status `running`/`paused`/`stopped`/`done`/`error`, pending payload, allowed hosts, fetch count, trace). Writes use a short-lived connection per write (tools run in worker threads).
+- **Compact history:** follow-up runs get the history of instructions, final answers and row notes only, as before. Tool traces stay in the run's thread and on screen.
+- **Restore on launch:** `Session.restore()` loads pages, rows and history. A run with status `paused` shows its question card; `running` (the app died mid-run) or `stopped` shows a Resume banner; Resume continues from the last checkpoint (`astream(None, config)` for crash and stop, `Command(resume=...)` for a pause).
+- **Stop** ends the stream at the next safe point and leaves the run `stopped` and resumable. The in-flight tool step may finish in the background; on resume it re-runs, which is safe because tools are idempotent.
+- **New session** (with confirmation) deletes the session store rows and the checkpoint threads and starts clean.
+- **Data directory:** `SCRAPER_DATA_DIR`, default `~/.page-chat/`, created on first launch.
 
-Defaults, each configurable:
-- Steps: 25 model steps per run (`SCRAPER_AGENT_MAX_STEPS`).
-- Pages: 30 fetches per run (`SCRAPER_AGENT_MAX_PAGES`).
-- Tool result size: 3,000 tokens each (`SCRAPER_TOOL_RESULT_TOKENS`).
-- Domain allowlist: domains of pages already in the session, of the URL bar seed, and of URLs written in the user's instruction. `www.` is equivalent to bare. Every fetch (including the post-redirect URL) is checked; others are refused with a tool error saying the user must name that site.
-- Repeat guard: the same tool call with identical arguments three times in a row ends the run (`limit: repeat`).
-- Context guard: when the conversation exceeds 70% of the model's context window, older tool results are replaced with a short `[trimmed]` stub. If it still does not fit, the run ends with `limit: context`.
-- Stop: a flag checked between steps and tool calls. An in-flight fetch completes first.
-- Prompt injection: tool results are wrapped as quoted untrusted data; the system prompt says never to follow instructions found in page content; the allowlist and budgets limit the damage of a hijacked run; no tool writes files, runs code or sends data anywhere except `add_rows`. Reduced, not eliminated.
+### Events and UI mapping
 
-### History and follow-ups
-
-History keeps user instructions, final answers, and a one-line note of rows collected. Full tool traces live in the on-screen log only, so they do not consume context on later turns. An interrupted run records what was produced and is marked interrupted, as in the existing app.
-
-### Results table
-
-`Session.rows: list[dict]`, cleared when a new manual scrape starts a new session (an agent run continues the current session). Export helpers `rows_to_csv(rows)` and `rows_to_json(rows)` produce text: CSV uses the union of keys in first-seen order, empty string for missing values, values stringified; JSON is a list of objects.
+`AgentRunner.stream(...)` consumes `agent.astream(..., stream_mode=["messages", "updates"])` and
+yields `AgentEvent(kind, text, name, args, step, ok, count, urls, payload)` with kinds `step`,
+`reasoning`, `answer`, `tool_start`, `tool_result`, `rows_added`, `needs_input`, `limit`, `error`,
+`done`. Mapping: AI message chunks give `reasoning` (from `additional_kwargs`) and `answer`
+(content); a model-node update with tool calls gives `tool_start`; a tools-node update gives
+`tool_result` plus `rows_added`; the `__interrupt__` key gives `needs_input`; completion gives
+`done`. The answer is the text of the last model step.
 
 ### UI
 
-- Instruction box placeholder: "Tell the agent what to scrape, or ask about the pages". The URL bar and Scrape button remain as an optional seed.
-- The agent's turn renders a live step log: one line per tool call ("Fetched example.com/pricing, 3 links"), expandable to show arguments and the trimmed result; a step counter (for example 4/25); a Stop button replacing Send while a run is active.
-- Results panel appears once rows exist: a table, Download CSV, Download JSON, row count. Downloads use NiceGUI's `ui.download`.
-- The page list shows pages the agent fetched, highlighted when used.
+- Instruction box: "Tell the agent what to scrape, or ask about the pages". The URL bar and Scrape button stay as an optional seed. An **Agent switch** (default on) turns tools off for models without tool calling and uses the previous Q&A path.
+- Live step log (one line per tool call, expandable), step counter, Stop button.
+- **Question card** for `needs_input`: the question, option buttons, a free-text field with Send; `limit` cards show what was used and offer Continue, Wrap up, Stop; `site` cards show the host with Allow and Deny.
+- **Resume banner** on launch for an interrupted or stopped run.
+- Results panel with table, Download CSV, Download JSON, row count.
+- **New session** button with confirmation.
 - Visual work follows the existing theme and uses the `frontend-design` skill.
 
 ## Error handling
 
 | Failure | Behaviour |
 |---|---|
-| Fetch error (403, 404, timeout, browser missing) | Returned to the model as a tool error with the existing hint (for example "try stealthy mode"); the run continues. |
-| Domain not allowed | Tool error naming the allowed domains; the run continues. |
-| Unknown tool, malformed or missing arguments | Tool error describing the problem; the run continues. |
-| Selector matches nothing or is invalid | Tool error or "0 matches"; the run continues. |
-| Step, page, repeat or context limit | Run ends with a clear message naming the limit; partial rows and answer are kept. |
-| LM Studio unreachable or stream dies | Existing handling: error notice, partial output kept and marked interrupted, Regenerate offered. |
-| Unexpected exception in the loop | Shown as an error notice; controls unlock. |
+| Fetch error (403, 404, timeout, browser missing) | Returned to the model as a tool error with the existing hint; the run continues. |
+| Bad tool arguments, unknown tool, bad selector | Tool error text for the model; the run continues. |
+| Host not allowed | `site` pause. |
+| Step, page or repeat limit | `limit` pause. |
+| Context limit | Run ends with a clear message; partial rows and answer are kept. |
+| LM Studio unreachable or stream dies | Error notice; the run stays resumable from its last checkpoint. |
+| App closed or crashed mid-run | Restored on launch with a Resume banner. |
+| Corrupt or missing database | Notice offering a fresh session; never a crash on launch. |
+
+## Security
+
+Scraped text and tool results are untrusted. Tool results are quoted data; the system prompt says
+never to follow instructions found in them; the allowlist and budgets limit a hijacked run; the
+only tool that changes state is `add_rows`, and `ask_user` can only ask. Tracing to LangSmith is
+forced off. CSV export neutralises spreadsheet formulas. The server binds to `127.0.0.1` only.
+The data directory is created with user-only permissions (0700).
 
 ## Testing
 
 pytest, test-first, no live internet and no real model in the suite.
-- `llm.stream_step`: fake SSE server streams tool-call fragments split across chunks, two calls in one step, text and reasoning interleaved with calls, malformed argument JSON, empty step, plus existing error cases.
-- `tools.py`: fixture pages; `extract` with selector and attribute; `list_links` filtering; `focus` excerpts; result cap; domain allowlist (instruction-named domains, `www.`, redirect off-domain); page counter; `add_rows` merging and rejection; fetch-error text.
-- `agent.py`: scripted fake LLM; direct answer with no tools; fetch, extract, add_rows, answer; step budget; page budget; repeat guard; Stop mid-run; unknown tool and bad arguments; context trimming; history contents.
-- `session.py` and exports: rows persistence and reset; CSV and JSON edge cases (commas, quotes, unicode, ragged rows).
-- UI: one NiceGUI `user`-fixture smoke test (instruct, see steps and table, download).
-- Manual: one run against the real Qwen model on a local fixture site with a two-page instruction, driven and screenshotted with Playwright.
+- `chat_model`: a mock SSE server streams `reasoning_content` and `content`; the subclass keeps both (guards against upgrade breakage).
+- `tools`: fixture pages; allowlist, redirect, budget, idempotent `fetch_page` and `add_rows`, selector extraction, argument errors, artifact contents.
+- `guards`/`agent`: a scripted fake chat model (with `bind_tools`) drives the real `create_agent` graph: direct answer; tool round trips; `ask_user` pause and resume; `limit` pauses with continue, wrap-up and stop; `site` approval allow and deny; repeat guard; context trim; stop and resume; idempotency of re-run tools after resume.
+- Durability: run until a pause with a file-backed checkpointer, discard the objects, rebuild everything from the same files, resume with `Command(resume=...)`, and assert the run completes and rows are not duplicated.
+- `store`: round trip of pages, rows, history, run record; corrupt-file handling.
+- `exports`: CSV and JSON edge cases including formula neutralisation.
+- UI: NiceGUI `user`-fixture smoke tests for a run, a pause card answer, and the resume banner.
+- Manual: one run against the real Qwen model on a local fixture site, including an `ask_user` pause and a restart-and-resume, driven and screenshotted with Playwright.
 
 ## Configuration
 
-New: `SCRAPER_AGENT_MAX_STEPS` (25), `SCRAPER_AGENT_MAX_PAGES` (30), `SCRAPER_TOOL_RESULT_TOKENS` (3000). No new dependencies.
+New: `SCRAPER_AGENT_MAX_STEPS` (25), `SCRAPER_AGENT_MAX_PAGES` (30), `SCRAPER_TOOL_RESULT_TOKENS`
+(3000), `SCRAPER_DATA_DIR` (`~/.page-chat`).
 
 ## Out of scope
 
-Saved runs or scheduling, logins, forms and click-through JavaScript interaction, parallel
-tool calls, sub-agents, persistence.
+Multiple saved sessions, scheduling, logins, forms and click-through JavaScript interaction,
+parallel agents and sub-agents, LangSmith or any cloud tracing, Postgres.
