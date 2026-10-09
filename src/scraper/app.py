@@ -66,6 +66,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         scrape_btn = ui.button("Scrape", icon="travel_explore").mark("scrape")
         cancel_btn = ui.button("Cancel", icon="close").props("flat").mark("cancel")
         cancel_btn.set_visibility(False)
+        new_btn = ui.button(icon="restart_alt").props('flat round aria-label="New session"').mark("new-session")
+        new_btn.tooltip("Start a new session")
 
     progress = ui.linear_progress(value=0, show_value=False).classes("w-full")
     progress.set_visibility(False)
@@ -470,12 +472,41 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         status_label.set_text("LM Studio connected")
         on_model_change()
 
+    # ---- restore and new session ---------------------------------------------
+    def show_resume_banner() -> None:
+        notice_box.clear()
+        with notice_box, ui.element("div").classes("pc-notice pc-notice--info"):
+            ui.label("A run was interrupted.").classes("pc-notice-title")
+            ui.label(f"Instruction: {shorten(session.run.instruction, 160)}").classes("pc-notice-hint")
+            with ui.row():
+                ui.button("Resume", on_click=proceed).mark("resume")
+                ui.button("Discard run", on_click=discard).props("flat").mark("discard")
+
+    async def confirm_new_session() -> None:
+        dialog.close()
+        if busy["ask"] or busy["scrape"]:
+            return
+        await session.new_session()
+        pause_box.clear()
+        notice_box.clear()
+        preview.set_content("Scraped text appears here, exactly as the model receives it.")
+        render_history()
+        refresh_sources()
+        update_controls()
+
+    with ui.dialog() as dialog, ui.card():
+        ui.label("Start a new session? This clears the pages, results, chat and any paused run.")
+        with ui.row():
+            ui.button("Cancel", on_click=dialog.close).props("flat").mark("cancel-new")
+            ui.button("Clear everything", on_click=confirm_new_session).mark("confirm-new")
+
     # ---- wiring --------------------------------------------------------------
     scrape_btn.on_click(do_scrape)
     url_input.on("keydown.enter", do_scrape)
     cancel_btn.on_click(session.cancel)
     send_btn.on_click(send)
     stop_btn.on_click(session.cancel)
+    new_btn.on_click(dialog.open)
     question.on("keydown.enter", send)
     agent_switch.on_value_change(lambda: (update_controls(), render_history() if not session.history else None))
     model_select.on_value_change(on_model_change)
@@ -484,4 +515,15 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
     render_history()
     refresh_sources()
+    if session.pages:
+        show_preview(session.pages[0])
     update_controls()
+    if session.pending is not None:
+        show_pause(session.pending)
+    elif session.resumable:
+        show_resume_banner()
+    if session.store is not None and session.store.recovered:
+        show_notice(
+            "The saved session could not be read, so a fresh one was started.",
+            hint="The unreadable file was kept next to it with a .corrupt suffix.",
+        )

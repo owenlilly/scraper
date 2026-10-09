@@ -1,5 +1,7 @@
 import asyncio
 
+from contextlib import AsyncExitStack
+
 from fakes import FakeLLM, ScriptedChat, ai, call, make_fetch, make_page
 from nicegui import ui
 from nicegui.testing import User
@@ -8,6 +10,8 @@ from scraper.app import build_ui, describe_call, shorten
 from scraper.config import Config
 from scraper.llm import Event
 from scraper.session import Session
+from scraper.agent import open_checkpointer
+from scraper.store import SessionStore
 
 SITE = "https://site.test/"
 
@@ -235,3 +239,108 @@ async def test_a_model_error_shows_a_notice_with_resume(user: User):
     await user.should_see("Cannot reach LM Studio")
     user.find(kind=ui.button, content="Resume").click()
     await user.should_see("Fine now.")
+
+
+# ---- restore and new session ------------------------------------------------
+
+
+async def leave_a_cut_off_run(tmp_path, web, script, instruction):
+    """Run until the first tool result or pause, then drop everything unfinished, as a crash would."""
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        model = ScriptedChat(script=list(script))
+        session = Session(
+            Config(request_delay=0.0),
+            FakeLLM(),
+            make_fetch(web),
+            store=SessionStore(tmp_path / "session.db"),
+            checkpointer=saver,
+            model_factory=lambda model_id: model,
+        )
+        stream = session.run_agent(instruction, "qwen-test")
+        async for event in stream:
+            if event.kind in ("tool_result", "needs_input"):
+                break
+        await stream.aclose()
+
+
+async def restored_session(stack, tmp_path, web, script):
+    saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+    model = ScriptedChat(script=list(script))
+    session = Session(
+        Config(request_delay=0.0),
+        FakeLLM(),
+        make_fetch(web),
+        store=SessionStore(tmp_path / "session.db"),
+        checkpointer=saver,
+        model_factory=lambda model_id: model,
+    )
+    await session.restore()
+    return session
+
+
+async def test_a_cut_off_run_shows_a_resume_banner_after_a_restart_and_resume_finishes_it(user: User, tmp_path):
+    # Review Focus 3
+    web = {SITE: make_page(SITE, title="Site Title")}
+    await leave_a_cut_off_run(tmp_path, web, [ai("", call("fetch_page", "c1", url=SITE)), ai("Finished the job.")], f"Look at {SITE}")
+    async with AsyncExitStack() as stack:
+        session = await restored_session(stack, tmp_path, web, [ai("Finished the job.")])
+        register_page(FakeLLM(), session)
+        await user.open("/")
+        await user.should_see("A run was interrupted.")
+        await user.should_see("Site Title")  # the pages were restored too
+        user.find(marker="resume").click()
+        await user.should_see("Finished the job.")
+        assert session.run.status == "done"
+
+
+async def test_a_paused_run_shows_its_question_on_launch_and_an_option_resumes_it(user: User, tmp_path):
+    # Review Focus 3
+    web = {SITE: make_page(SITE)}
+    script = [ai("", call("ask_user", "c1", question="Which plan?", options=["Starter", "Team"]))]
+    await leave_a_cut_off_run(tmp_path, web, script, f"Price at {SITE}")
+    async with AsyncExitStack() as stack:
+        session = await restored_session(stack, tmp_path, web, [ai("Team costs forty dollars.")])
+        register_page(FakeLLM(), session)
+        await user.open("/")
+        await user.should_see("Which plan?")
+        user.find(marker="option:Team").click()
+        await user.should_see("Team costs forty dollars.")
+
+
+async def test_the_resume_banner_can_discard_the_run(user: User, tmp_path):
+    web = {SITE: make_page(SITE)}
+    await leave_a_cut_off_run(tmp_path, web, [ai("", call("fetch_page", "c1", url=SITE)), ai("never")], f"Look at {SITE}")
+    async with AsyncExitStack() as stack:
+        session = await restored_session(stack, tmp_path, web, [])
+        register_page(FakeLLM(), session)
+        await user.open("/")
+        await user.should_see("A run was interrupted.")
+        user.find(marker="discard").click()
+        await user.should_not_see("A run was interrupted.")
+        assert session.run.status == "ended" and not session.resumable
+
+
+async def test_a_corrupt_session_file_gives_a_fresh_session_and_a_notice(user: User, tmp_path):
+    # Review Focus 8
+    (tmp_path / "session.db").write_bytes(b"not a database" * 100)
+    session = Session(Config(request_delay=0.0), FakeLLM(), make_fetch({}), store=SessionStore(tmp_path / "session.db"))
+    await session.restore()
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("could not be read")
+    await user.should_see("No pages yet.")
+
+
+async def test_new_session_clears_pages_and_chat_after_confirmation(user: User):
+    web = {SITE: make_page(SITE, title="Site Title")}
+    session, _ = agent_session(web, [ai("The answer.")])
+    await session.scrape(SITE)
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("Site Title")
+    user.find(marker="new-session").click()
+    await user.should_see(marker="confirm-new")
+    user.find(marker="confirm-new").click()
+    await user.should_see("No pages yet.")
+    assert session.pages == [] and session.history == []
