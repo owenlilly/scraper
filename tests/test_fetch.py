@@ -158,3 +158,17 @@ def test_empty_flag_only_applies_to_fast_mode():
 def test_unknown_mode_is_a_programming_error():
     with pytest.raises(ValueError):
         fetch("https://x.test/", "turbo")
+
+
+def test_backend_error_messages_drop_library_boilerplate():
+    def refused(url, timeout):
+        raise Exception(
+            "Failed to perform, curl: (7) Failed to connect to 127.0.0.1:1 after 0 ms: "
+            "Could not connect to server. See https://curl.se/libcurl/c/libcurl-errors.html first for more details."
+        )
+
+    with pytest.raises(FetchError) as err:
+        fetch("https://x.test/", "fast", backends={"fast": refused})
+    assert "curl.se" not in err.value.message
+    assert "Could not connect to server" in err.value.message
+    assert "Failed to perform, curl: (7)" not in err.value.message

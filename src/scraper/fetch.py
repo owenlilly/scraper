@@ -113,8 +113,10 @@ def _translate(exc: Exception, mode: str, url: str) -> FetchError:
             "The browser for this mode is not installed",
             hint="Run `uv run scrapling install` once, then try again.",
         )
-    first_line = text.splitlines()[0][:200] if text else type(exc).__name__
-    return FetchError(f"Could not fetch {url}: {first_line}")
+    first_line = text.splitlines()[0] if text else type(exc).__name__
+    first_line = re.sub(r"\s*See https?://\S+.*$", "", first_line)  # library help-link boilerplate
+    first_line = re.sub(r"^Failed to perform, curl: \(\d+\)\s*", "", first_line)
+    return FetchError(f"Could not fetch {url}: {first_line[:200]}")
 
 
 def _content_type(response) -> str:
