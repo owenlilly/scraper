@@ -80,11 +80,10 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
     progress = ui.linear_progress(value=0, show_value=False).classes("w-full")
     progress.set_visibility(False)
-    notice_box = ui.column().classes("w-full px-4")
 
     # ---- body ----------------------------------------------------------------
     with ui.splitter(value=34).classes("w-full grow") as split:
-        with split.before:
+        with split.before, ui.column().classes("pc-left w-full gap-0"):
             ui.label("Pages").classes("pc-pane-title")
             sources_box = ui.column().classes("w-full gap-0")
             context_label = ui.label("").classes("pc-hint")
@@ -92,10 +91,11 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             ui.label("What the model reads").classes("pc-pane-title")
             with ui.scroll_area().classes("w-full h-[calc(100vh-26rem)] min-h-[12rem]"):
                 preview = ui.markdown("Scraped text appears here, exactly as the model receives it.").classes("pc-preview")
-        with split.after:
-            with ui.scroll_area().classes("w-full h-[calc(100vh-20rem)] min-h-[14rem]") as chat_scroll:
+        with split.after, ui.column().classes("pc-right w-full gap-0"):
+            with ui.scroll_area().classes("w-full pc-chat-scroll") as chat_scroll:
                 chat_box = ui.column().classes("w-full gap-2 pc-chat")
             results_box = ui.column().classes("w-full pc-results")
+            notice_box = ui.column().classes("w-full pc-notices")
             pause_box = ui.column().classes("w-full pc-pause")
             with ui.row().classes("w-full items-center pc-compose"):
                 agent_switch = ui.switch("Agent", value=True).props("dense").mark("agent")
@@ -134,9 +134,9 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
     ticker = ui.timer(0.25, update_progress, active=False)
 
-    def show_notice(message: str, *, hint: str | None = None, action=None, action_label: str = "Retry") -> None:
+    def show_notice(message: str, *, hint: str | None = None, action=None, action_label: str = "Retry", info: bool = False) -> None:
         notice_box.clear()
-        with notice_box, ui.element("div").classes("pc-notice"):
+        with notice_box, ui.element("div").classes("pc-notice pc-notice--info" if info else "pc-notice"):
             ui.label(message).classes("pc-notice-title")
             if hint:
                 ui.label(hint).classes("pc-notice-hint")
@@ -178,10 +178,14 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                     ui.label(shorten(text)).classes("pc-tool-result")
         return entry
 
+    def waiting_run() -> bool:
+        return session.run is not None and session.run.resumable
+
     def render_history() -> None:
+        turn_state["turn"] = None  # the chat is rebuilt, so any live bubble is gone
         chat_box.clear()
         with chat_box:
-            if not session.history:
+            if not session.history and not waiting_run():
                 ui.label(
                     "Tell the agent what to scrape, or ask a question about the pages."
                     if agent_switch.value
@@ -204,6 +208,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                         ui.label(message.note).classes("pc-cite")
                     if message.sources:
                         ui.label("Based on " + ", ".join(message.sources)).classes("pc-cite")
+            if waiting_run():
+                ui.chat_message(session.run.instruction, sent=True, name="You")  # the task a paused or interrupted run belongs to
         chat_scroll.scroll_to(percent=1.0)
 
     def refresh_results() -> None:
@@ -331,6 +337,8 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
             await run_ask(original)
 
     # ---- the agent -----------------------------------------------------------
+    turn_state: dict = {"turn": None}
+
     def show_pause(payload: dict) -> None:
         pause_box.clear()
         kind = payload.get("kind")
@@ -357,41 +365,56 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                 ui.button("Discard run", on_click=discard).props("flat").mark("discard")
         update_controls()
 
-    async def consume(stream) -> dict:
-        """Render one agent stream into a fresh assistant bubble. Returns how it ended."""
-        outcome = {"error": None, "limit": None, "paused": False}
+    def new_turn() -> dict:
         with chat_box:
             with ui.chat_message(name="Agent"):
                 step_label = ui.label("Working...").classes("pc-step")
                 log_box = ui.column().classes("w-full gap-1 pc-log")
                 with ui.expansion("Reasoning", icon="psychology").classes("w-full pc-reasoning") as think_box:
                     think_md = ui.markdown()
-                answer_md = ui.markdown("Reading...").classes("pc-waiting")
+                answer_md = ui.markdown("Thinking...").classes("pc-waiting")
         think_box.set_visibility(False)
+        return {"step": step_label, "log": log_box, "think_box": think_box, "think": think_md, "answer": answer_md, "entries": deque(), "waiting": True}
+
+    async def consume(stream) -> dict:
+        """Render one agent stream into an assistant bubble (a paused run keeps its bubble). Returns how it ended."""
+        outcome = {"error": None, "limit": None, "paused": False}
+        turn = turn_state["turn"] or new_turn()
+        turn_state["turn"] = turn
+        turn["step"].set_text("Working...")
         reasoning = answer = ""
-        entries: deque = deque()
+
+        def stop_waiting() -> None:
+            if turn["waiting"]:
+                turn["waiting"] = False
+                turn["answer"].classes(remove="pc-waiting")
+                turn["answer"].set_content("")
+
         try:
             async with aclosing(stream) as events:
                 async for event in events:
                     if event.kind == "step":
                         reasoning = answer = ""
-                        think_md.set_content("")
-                        think_box.set_visibility(False)
-                        answer_md.classes(remove="pc-waiting")
-                        answer_md.set_content("")
-                        step_label.set_text(f"Step {event.step}")
+                        turn["think"].set_content("")
+                        turn["think_box"].set_visibility(False)
+                        turn["answer"].set_content("Thinking...")
+                        turn["answer"].classes(add="pc-waiting")
+                        turn["waiting"] = True
+                        turn["step"].set_text(f"Step {event.step}")
                     elif event.kind == "reasoning":
+                        stop_waiting()
                         reasoning += event.text
-                        think_box.set_visibility(True)
-                        think_md.set_content(reasoning)
+                        turn["think_box"].set_visibility(True)
+                        turn["think"].set_content(reasoning)
                     elif event.kind == "answer":
+                        stop_waiting()
                         answer += event.text
-                        answer_md.set_content(answer)
+                        turn["answer"].set_content(answer)
                     elif event.kind == "tool_start":
-                        entries.append(add_log_entry(log_box, event.name, event.args, None, True))
+                        turn["entries"].append(add_log_entry(turn["log"], event.name, event.args, None, True))
                     elif event.kind == "tool_result":
-                        if entries:
-                            entry = entries.popleft()
+                        if turn["entries"]:
+                            entry = turn["entries"].popleft()
                             entry.props(f"icon={'check' if event.ok else 'error_outline'}")
                             with entry:
                                 ui.label(shorten(event.text)).classes("pc-tool-result")
@@ -408,7 +431,12 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
                     chat_scroll.scroll_to(percent=1.0)
         except Exception as exc:  # surface anything unexpected instead of leaving the UI locked
             outcome["error"] = f"Unexpected error: {exc}"
-        step_label.set_text("Waiting for your answer" if outcome["paused"] else "Finished")
+        stop_waiting()
+        if outcome["paused"]:
+            turn["step"].set_text("Waiting for your answer")
+        else:
+            turn_state["turn"] = None
+            turn["step"].set_text("Stopped" if outcome["limit"] == "stopped" else ("Interrupted" if outcome["error"] else "Finished"))
         return outcome
 
     async def run_stream(stream) -> None:
@@ -436,6 +464,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         elif outcome["limit"]:
             show_notice(
                 LIMIT_MESSAGES.get(outcome["limit"], outcome["limit"]),
+                info=True,
                 hint="Resume continues from the last step." if session.resumable else None,
                 action=proceed if session.resumable else None,
                 action_label="Resume",
@@ -443,6 +472,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
 
     async def start_agent(text: str) -> None:
         question.set_value("")
+        turn_state["turn"] = None
         if not session.history:
             chat_box.clear()  # drop the empty-state note
         with chat_box:
@@ -463,6 +493,7 @@ def build_ui(cfg: Config, llm, session: Session) -> None:
         if busy["ask"]:
             return
         await session.discard_run()
+        turn_state["turn"] = None
         pause_box.clear()
         notice_box.clear()
         update_controls()

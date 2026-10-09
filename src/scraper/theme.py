@@ -113,4 +113,9 @@ AGENT_CSS = """
 .pc-notice--info { border-left-color: var(--pc-blue); background: rgba(127, 166, 201, 0.12); }
 .pc-results { padding: 0.25rem 1.25rem; max-width: 76ch; }
 .pc-table { background: var(--pc-paper); max-height: 14rem; }
+.pc-left, .pc-right { height: calc(100vh - 8.6rem); flex-wrap: nowrap; }
+.pc-left { overflow-y: auto; }
+.pc-chat-scroll { flex: 1 1 0; height: auto !important; min-height: 8rem; }
+.pc-notices { padding: 0 1.25rem; max-width: 76ch; }
+.pc-results .pc-table { max-height: 9rem; }
 """

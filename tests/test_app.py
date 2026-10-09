@@ -304,6 +304,7 @@ async def test_a_paused_run_shows_its_question_on_launch_and_an_option_resumes_i
         register_page(FakeLLM(), session)
         await user.open("/")
         await user.should_see("Which plan?")
+        await user.should_see(f"Price at {SITE}")  # the chat shows which task the question belongs to
         user.find(marker="option:Team").click()
         await user.should_see("Team costs forty dollars.")
 
@@ -386,3 +387,13 @@ async def test_a_new_manual_scrape_clears_the_results_table(user: User):
     user.find(marker="scrape").click()
     await user.should_not_see("Download CSV")
     assert session.rows == []
+
+
+async def test_a_context_limit_shows_a_notice_that_explains_it(user: User):
+    cfg = Config(request_delay=0.0, context_fraction=0.001, reply_reserve=0)
+    session, _ = agent_session({SITE: make_page(SITE)}, [ai("never")], cfg=cfg)
+    register_page(FakeLLM(), session)
+    await user.open("/")
+    await user.should_see("LM Studio connected")
+    await send_instruction(user, "x" * 4000)
+    await user.should_see("no longer fits the model's context window")
