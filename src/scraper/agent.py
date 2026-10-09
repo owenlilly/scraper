@@ -1,5 +1,6 @@
 """Build the LangGraph agent and map its streams to UI-facing AgentEvents."""
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
@@ -30,7 +31,26 @@ class AgentEvent:
 
 
 async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSaver:
-    return await stack.enter_async_context(AsyncSqliteSaver.from_conn_string(str(path)))
+    """Open the SQLite checkpointer for the life of `stack`. An unreadable file is set aside and replaced."""
+    path = Path(path)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, mode=0o700)
+    for attempt_number in (1, 2):
+        attempt = AsyncExitStack()
+        try:
+            saver = await attempt.enter_async_context(AsyncSqliteSaver.from_conn_string(str(path)))
+            await saver.setup()
+            await saver.aget_tuple({"configurable": {"thread_id": "probe"}})
+        except Exception:
+            await attempt.aclose()
+            if attempt_number == 2 or not path.exists():
+                raise
+            path.rename(path.with_name(f"{path.name}.corrupt-{int(time.time())}"))
+            for suffix in ("-wal", "-shm"):
+                Path(str(path) + suffix).unlink(missing_ok=True)
+            continue
+        stack.push_async_callback(attempt.aclose)
+        return saver
 
 
 def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None):

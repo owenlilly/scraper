@@ -97,3 +97,20 @@ def apply_theme() -> None:
         warning="#E0A84A",
     )
     ui.add_css(CSS)
+    ui.add_css(AGENT_CSS)
+
+
+AGENT_CSS = """
+.pc-step { font-size: 0.8rem; color: var(--pc-muted); }
+.pc-log { margin: 0.25rem 0 0.5rem; }
+.pc-tool { border-left: 2px solid var(--pc-rule); font-size: 0.85rem; color: var(--pc-muted); }
+.pc-tool .q-item { min-height: 30px; padding-left: 0.6rem; }
+.pc-tool .q-icon { font-size: 1rem; }
+.pc-tool-result { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; color: var(--pc-text); padding: 0.25rem 0.6rem 0.5rem; }
+.pc-pause { padding: 0 1.25rem; max-width: 76ch; }
+.pc-pause-card { border: 1px solid var(--pc-mark); background: rgba(230, 208, 74, 0.08); padding: 0.8rem 1rem; border-radius: 4px; width: 100%; }
+.pc-pause-question { font-family: var(--pc-serif); font-size: 1.05rem; margin-bottom: 0.6rem; }
+.pc-notice--info { border-left-color: var(--pc-blue); background: rgba(127, 166, 201, 0.12); }
+.pc-results { padding: 0.25rem 1.25rem; max-width: 76ch; }
+.pc-table { background: var(--pc-paper); max-height: 14rem; }
+"""

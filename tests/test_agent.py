@@ -203,3 +203,21 @@ async def test_deleting_a_thread_forgets_its_state():
     await collect(runner.run("t1", MESSAGES))
     await runner.delete("t1")
     assert await runner.pending("t1") is None
+
+
+async def test_an_unreadable_checkpoint_file_is_set_aside_and_replaced(tmp_path):
+    # Review Focus 8
+    path = tmp_path / "checkpoints.db"
+    path.write_bytes(b"not a database" * 100)
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(path, stack)
+        runner, *_ = setup([ai("fine")], saver=saver)
+        events = await collect(runner.run("t1", MESSAGES))
+        assert events[-1].kind == "done"
+    assert list(tmp_path.glob("checkpoints.db.corrupt-*"))
+
+
+async def test_a_missing_data_directory_is_created_for_the_checkpoint_file(tmp_path):
+    async with AsyncExitStack() as stack:
+        await open_checkpointer(tmp_path / "new" / "checkpoints.db", stack)
+    assert (tmp_path / "new" / "checkpoints.db").exists()

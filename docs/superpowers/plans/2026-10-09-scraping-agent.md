@@ -4517,7 +4517,7 @@ Then run the app with a fixture site (see Step 8), and using the Playwright MCP 
 
 - [ ] **Step 7: Replace `README.md` with:**
 
-```markdown
+````markdown
 # Page Chat
 
 Give a local Qwen model, served by LM Studio, plain-English instructions about what to scrape. It fetches pages with [Scrapling](https://github.com/D4Vinci/Scrapling), extracts what you asked for, and hands back an answer plus a table you can download. Runs entirely on your machine in a small web UI.
@@ -4590,7 +4590,7 @@ The LM Studio status in the footer re-checks every 15 seconds.
 ```bash
 uv run pytest
 ```
-```
+````
 
 - [ ] **Step 8: Real-model end-to-end check**
 
@@ -4603,7 +4603,9 @@ cat > shop/index.html <<'EOF'
 <ul><li><a href="p1.html">Anvil</a></li><li><a href="p2.html">Rope</a></li><li><a href="p3.html">Magnet</a></li></ul>
 <a href="http://localhost:8766/partner.html">Partner site</a></body></html>
 EOF
-for n in 1 2 3; do names=(x Anvil Rope Magnet); prices=(0 40 12 25); printf '<html><head><title>%s</title></head><body><h1 class="name">%s</h1><p class="price">$%s</p></body></html>' "${names[$n]}" "${names[$n]}" "${prices[$n]}" > shop/p$n.html; done
+printf '<html><head><title>Anvil</title></head><body><h1 class="name">Anvil</h1><p class="price">$40</p></body></html>' > shop/p1.html
+printf '<html><head><title>Rope</title></head><body><h1 class="name">Rope</h1><p class="price">$12</p></body></html>' > shop/p2.html
+printf '<html><head><title>Magnet</title></head><body><h1 class="name">Magnet</h1><p class="price">$25</p></body></html>' > shop/p3.html
 printf '<html><head><title>Plans</title></head><body><h1>Plans</h1><p>Starter costs 10 dollars. Team costs 40 dollars.</p></body></html>' > plans.html
 mkdir -p partner && printf '<html><head><title>Partner</title></head><body><p>Partner catalogue.</p></body></html>' > partner/partner.html
 (python3 -m http.server 8765 >/dev/null 2>&1 &)
