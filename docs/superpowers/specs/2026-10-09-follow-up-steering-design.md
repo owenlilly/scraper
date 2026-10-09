@@ -39,11 +39,11 @@ Success criteria:
 4. **Final answer racing a message.** If the model produces a final answer (no tool calls) while an undelivered follow-up exists, the run does not end: it jumps back to the model with the follow-up, so the same run answers it. The earlier answer text stays visible in the stream; only the last answer is recorded in history.
 5. **Limits.** A follow-up does not reset step, page or repeat counters, and does not lift a "wrap up" the user chose at a limit pause. It is delivered like any other message and the agent answers within the remaining allowance.
 6. **Paused run.** While paused on a question, site approval or limit, a message is queued and delivered with the first model call after the user resolves the pause.
-7. **Run ended first.** If the run reaches `done`, `limit` or `error` with follow-ups still undelivered, the UI starts a normal new turn from them (joined in order, one per line) instead of dropping them. The session reports them through `Session.undelivered`.
+7. **Run ended first.** If the run ends for good (status `done` or `ended`) with follow-ups still undelivered, the UI starts a normal new turn from them (joined in order, one per line) instead of dropping them. `Session.take_undelivered()` returns and removes them. If the run ends in a resumable `error`, they stay queued on the run, still shown as queued, and are delivered when the user presses Resume.
 8. **Stop.** Pressing Stop discards the queue and puts the undelivered text back in the composer as a draft. Stop means stop.
 9. **Crash or restart.** Follow-ups are saved the moment they are sent. A resumed run delivers any that are still undelivered. The ones already injected live in the checkpoint and are not injected again.
-10. **Queue cap.** At most 5 undelivered follow-ups. Sending a sixth is refused with "The agent has not read your earlier messages yet." and the text stays in the composer.
-11. **History.** After a run that delivered follow-ups, the saved conversation reads: the original instruction, each delivered follow-up in delivery order, then the final assistant answer with its note, sources and trace. `_finish` builds one user `Message` per delivered follow-up.
+10. **Queue cap and size.** At most 5 undelivered follow-ups. Sending a sixth is refused with "The agent has not read your earlier messages yet." and the text stays in the composer. A follow-up longer than 2000 characters is refused with "Keep follow-ups under 2000 characters." (the context trimmer never sees these messages in time to shrink them, so their size is bounded at the door).
+11. **History.** History must keep strictly alternating user and assistant messages (`_recent_history`, `pop_interrupted` and the chat rendering pair them by position). After a run that delivered follow-ups, `_finish` records ONE user `Message` whose content is the instruction followed by each delivered follow-up in delivery order, each introduced by a blank line and `Follow-up: `, then the final assistant answer with its note, sources and trace.
 
 ## Components
 
@@ -56,24 +56,27 @@ New field `followups: list[Followup]` where `Followup = {id: str, text: str, del
 - `steer(text: str) -> SteerResult`. Not exclusive; it does not use `_exclusive()`. Rules, in order:
   1. No run, or `run.status` not in `running` / `paused` → `SteerResult("no_run")`; the caller starts a normal turn.
   2. Blank text → `SteerResult("empty")`.
-  3. Five undelivered already → `SteerResult("full")`.
-  4. Otherwise append `Followup(uuid, text, False)`, save the run, return `SteerResult("queued", id)`.
-- `undelivered -> list[str]`: texts of followups with `delivered` false, in order. Used by the UI after the stream ends.
-- `cancel()` additionally moves undelivered texts to `Session.stopped_drafts` (list[str]) and removes them from the run, so the UI can restore them to the composer. Delivered ones stay.
+  3. Five undelivered already (checked before the length rule) → `SteerResult("full")`.
+  4. More than 2000 characters → `SteerResult("too_long")`.
+  5. Otherwise append `{id, text, delivered: false}`, save the run, return `SteerResult("queued", id)`.
+- `take_undelivered() -> list[str]`: returns the texts of follow-ups with `delivered` false, in order, and removes them from the run (so a later Resume cannot deliver them a second time). Used by the UI after a run ends for good.
+- `cancel()` additionally, when a run is `running`, moves undelivered follow-ups out of the run into a drafts list; `take_stopped_drafts() -> list[str]` returns and clears it so the UI can restore them to the composer. Delivered ones stay.
 - `_finish` emits the extra user messages described in Behavior 11.
-- `_prepare` passes the run's follow-up inbox and an `on_followup` callback (marks delivered, widens the toolbox allowlist, saves the run) into `build_agent`.
+- `_prepare` passes the run's undelivered follow-ups and an `on_inject` callback (widens the toolbox allowlist; idempotent) into `build_agent`.
+- `_drive` marks a follow-up `delivered` and saves the run when the runner's `followup` event arrives, i.e. after LangGraph committed the injected message. The delivered flag is bookkeeping for the UI, the queue cap and history; it is never what prevents a double injection.
 
 ### Follow-up middleware (`guards.py`)
 
-New `FollowupInbox(AgentMiddleware)` placed **first** in the middleware list, so `ContextTrim` token accounting sees injected messages. Constructor takes `pending: Callable[[], list[Followup]]` and `on_followup: Callable[[Followup], None]`.
+New `FollowupInbox(AgentMiddleware)` placed **last** in the middleware list: `[ContextTrim, RunGuard, FollowupInbox]`. Last matters because a run paused inside `RunGuard.before_model` resumes by re-running only that node, so a hook placed before it would not run again before the first model call after the pause. Constructor takes `pending: Callable[[], list[dict]]` (the undelivered follow-ups, each `{id, text, delivered}`) and `on_inject: Callable[[dict], None] | None`.
 
-- `abefore_model` (and sync twin): take `pending()`. If empty → `None`. Otherwise return `{"messages": [HumanMessage(text, id=f.id) ...]}` and call `on_followup` for each. The explicit `id` makes a duplicate injection a no-op under the `add_messages` reducer, which covers a crash between the state commit and the delivered flag.
-- `aafter_model` (and sync twin), `can_jump_to=["model"]`: if the last AI message has no tool calls and `pending()` is non-empty → `{"jump_to": "model"}`. The next `abefore_model` then injects the message. A format-correction retry from `RunGuard.after_model` takes precedence: the follow-up jump applies only when the last AI message is a valid final answer and no correction was issued. Hook order is not relied on; the hook checks `format_retries` in state, and a test pins the behavior.
+- Pending means: not flagged delivered **and** whose id is not already the id of a message in `state["messages"]`. The conversation state is the source of truth, so a duplicate injection is impossible whatever the timing of the delivered flag.
+- `abefore_model` (and sync twin): if nothing is pending → `None`. Otherwise return `{"messages": [HumanMessage(text, id=f["id"], additional_kwargs={"followup": True}) ...]}` and call `on_inject` for each (the session widens the allowlist there, before the model can call a tool).
+- `aafter_model` (and sync twin), `can_jump_to=["model"]`: if the last message is an AI message with no tool calls, no invalid tool calls and non-empty text, and something is pending → `{"jump_to": "model"}`. The next `abefore_model` then injects the message. A reply with invalid tool calls is left to `RunGuard.after_model` (format retry, else it ends as an error and the follow-up stays queued for Resume); a test pins this.
 - `ContextTrim` only ever trims `ToolMessage` bodies, so follow-ups are never trimmed.
 
 ### Runner (`agent.py`)
 
-`_map` emits a new `AgentEvent("followup", text, id=...)` when a `before_model` node update contains a `HumanMessage` whose id matches a known follow-up (the middleware's update chunk). This is how the UI learns the agent has read the message. `AgentEvent` gains an optional `id` field.
+`_map` emits a new `AgentEvent("followup", text, id=...)` for each `HumanMessage` carrying `additional_kwargs["followup"]` in a `before_model` node update. This is how the UI learns the agent has read the message. `AgentEvent` gains an optional `id` field.
 
 ### System prompt (`session.py`)
 
@@ -96,8 +99,8 @@ Built under the `frontend-design` skill, as UI work.
 ## Data flow
 
 1. User submits text during a run → `Session.steer` → follow-up saved on the run (`delivered=false`) → UI shows a queued bubble.
-2. The agent finishes its current step. `FollowupInbox.abefore_model` finds the follow-up, returns a `HumanMessage(id=f.id)` state update, and `on_followup` marks it delivered, widens the allowlist and saves the run.
-3. The runner maps that node update to a `followup` event; the UI marks the bubble delivered.
+2. The agent finishes its current step. `FollowupInbox.abefore_model` finds the follow-up, returns a `HumanMessage(id=f.id)` state update, and `on_inject` widens the allowlist.
+3. The runner maps that committed node update to a `followup` event; `Session._drive` marks the follow-up delivered and saves the run, and the UI marks the bubble delivered.
 4. The model call sees the message and adapts. If it had already produced a final answer, `aafter_model` jumped back so it can respond.
 5. At the end, `_finish` writes instruction, follow-ups and final answer to history.
 
@@ -105,7 +108,7 @@ Built under the `frontend-design` skill, as UI work.
 
 - `steer` never raises for normal conditions; it returns a result code. Persistence errors are logged and returned as `SteerResult("error")` with the text left in the composer.
 - A follow-up in a crashed run is not lost: it is on the run record and delivered on resume. A duplicate injection is impossible because the message id equals the follow-up id.
-- If the run ends in `error` or `limit` with undelivered follow-ups, they are handed to the UI as a new turn, so the user's text is acted on rather than discarded.
+- If the run ends for good (`done` or `ended`) with undelivered follow-ups, they are handed to the UI as a new turn, so the user's text is acted on rather than discarded. If it ends in a resumable `error`, they stay queued and are delivered on Resume.
 
 ## Testing
 
@@ -113,11 +116,12 @@ Session and middleware (`ScriptedChat`, no real model):
 - A follow-up sent after the first step appears as a user message in the next model call and not before.
 - A follow-up queued during the final model call causes one extra step and is answered in the same run.
 - A follow-up naming a new host widens the allowlist with no site pause.
-- The sixth undelivered follow-up is refused; the first five are unaffected.
-- Redelivery after a simulated crash: the message appears exactly once (message id dedupe) and `delivered` is true.
+- The sixth undelivered follow-up and one over 2000 characters are refused; the first five are unaffected.
+- History keeps alternating user and assistant messages after a run with follow-ups, and a later turn's history pairs correctly.
+- Redelivery after a simulated crash: the message appears exactly once (state-id filter) and `delivered` is true.
 - A paused run: the follow-up is delivered with the first model call after resume.
 - Stop returns undelivered text through `stopped_drafts` and leaves delivered follow-ups intact.
-- A run ending with undelivered follow-ups exposes them through `undelivered`.
+- A run ending for good with undelivered follow-ups exposes them through `take_undelivered`; one ending in a resumable error keeps them queued and delivers them on Resume.
 - History order: instruction, follow-ups, final answer.
 - `steer` on an idle or finished session returns `no_run`; blank returns `empty`.
 - Old `RunRecord` JSON without `followups` loads.
@@ -128,7 +132,7 @@ UI (`user` fixture):
 - The composer stays enabled and Send stays visible during a run.
 - A sent message shows a queued bubble that becomes delivered on the `followup` event.
 - A submit after the run ended starts a normal turn.
-- Leftover follow-ups after an ended run start a new turn; Stop restores the draft.
+- Leftover follow-ups after an ended run start a new turn; Stop restores the draft. Queued bubbles are kept in their own area beneath the chat and move into the chat, followed by a new assistant bubble, when delivered, so the transcript stays in chronological order.
 
 Real model, fixture site (manual, once): start a multi-page instruction, send a follow-up that changes the target mid-run, and check the agent's later tool calls reflect it.
 
