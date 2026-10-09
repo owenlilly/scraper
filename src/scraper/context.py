@@ -145,3 +145,20 @@ def _retrieve(pages: Sequence[Page], question: str, token_budget: int) -> Contex
     text = "\n\n".join(_excerpt_block(chunks[i]) for i in picked)
     sources = tuple(dict.fromkeys(chunks[i].url for i in picked))
     return Context(text, sources, "retrieved")
+
+
+TRUNCATION_NOTE = "\n[truncated: pass a focus to read the relevant parts]"
+
+
+def view_page(page: Page, focus: str | None, token_budget: int) -> str:
+    """One page as a quoted block within the budget: whole, else focus excerpts, else the head."""
+    block = _page_block(page)
+    if estimate_tokens(block) <= token_budget:
+        return block
+    if focus and focus.strip():
+        excerpts = _retrieve([page], focus, token_budget).text
+        if excerpts:
+            return excerpts
+    overhead = estimate_tokens(_page_block(replace(page, markdown=""))) + estimate_tokens(TRUNCATION_NOTE)
+    limit = max(80, (token_budget - overhead) * 4)
+    return _page_block(replace(page, markdown=page.markdown[:limit].rstrip() + TRUNCATION_NOTE))
