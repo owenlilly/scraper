@@ -124,7 +124,7 @@ Middleware, with counters kept in the graph state so they survive a restart:
 - **Checkpointer:** `AsyncSqliteSaver` on `<data_dir>/checkpoints.db`, opened at app startup and closed at shutdown. Each run is its own thread, `thread_id = f"{session_id}-{run_number}"`, so a run's full message trace is isolated and cleaned up with the session.
 - **Session store (`store.py`):** `<data_dir>/session.db`. Tables: `meta` (session id, run counter), `pages` (url, title, markdown, links, html, looks_empty, position), `rows`, `history` (role, content, reasoning, sources, interrupted, note, trace), `run` (run number, instruction, status `running`/`paused`/`stopped`/`done`/`error`, pending payload, allowed hosts, fetch count, trace). Writes use a short-lived connection per write (tools run in worker threads).
 - **Compact history:** follow-up runs get the history of instructions, final answers and row notes only, as before. Tool traces stay in the run's thread and on screen.
-- **Restore on launch:** `Session.restore()` loads pages, rows and history. A run with status `paused` shows its question card; `running` (the app died mid-run) or `stopped` shows a Resume banner; Resume continues from the last checkpoint (`astream(None, config)` for crash and stop, `Command(resume=...)` for a pause).
+- **Restore on launch:** `Session.restore()` loads pages, rows and history. A run with status `paused` shows its question card; `running` (the app died mid-run) or `stopped` shows a Resume banner; Resume continues from the last checkpoint (`astream(None, config)` for crash and stop, `Command(resume=...)` for a pause). A resumable run whose checkpoint thread no longer exists (the checkpoint file was lost or replaced) is marked ended instead, so a Resume that cannot work is never offered.
 - **Stop** ends the stream at the next safe point and leaves the run `stopped` and resumable. The in-flight tool step may finish in the background; on resume it re-runs, which is safe because tools are idempotent.
 - **New session** (with confirmation) deletes the session store rows and the checkpoint threads and starts clean.
 - **Data directory:** `SCRAPER_DATA_DIR`, default `~/.page-chat/`, created on first launch.
@@ -143,9 +143,9 @@ yields `AgentEvent(kind, text, name, args, step, ok, count, urls, payload)` with
 
 - Instruction box: "Tell the agent what to scrape, or ask about the pages". The URL bar and Scrape button stay as an optional seed. An **Agent switch** (default on) turns tools off for models without tool calling and uses the previous Q&A path.
 - Live step log (one line per tool call, expandable), step counter, Stop button.
-- **Question card** for `needs_input`: the question, option buttons, a free-text field with Send; `limit` cards show what was used and offer Continue, Wrap up, Stop; `site` cards show the host with Allow and Deny.
+- **Question card** for `needs_input`: the question, option buttons, a free-text field with Send; `limit` cards show what was used and offer Continue, Wrap up, Stop (plus an optional note for the agent); `site` cards show the host with Allow and Deny. Every card and the resume banner has a **Discard run** button, so a question can never lock the composer.
 - **Resume banner** on launch for an interrupted or stopped run.
-- Results panel with table, Download CSV, Download JSON, row count.
+- Results panel with table, Download CSV, Download JSON (sent as UTF-8 bytes with a media type), row count; hidden until rows exist.
 - **New session** button with confirmation.
 - Visual work follows the existing theme and uses the `frontend-design` skill.
 
@@ -160,7 +160,7 @@ yields `AgentEvent(kind, text, name, args, step, ok, count, urls, payload)` with
 | Context limit | Run ends with a clear message; partial rows and answer are kept. |
 | LM Studio unreachable or stream dies | Error notice; the run stays resumable from its last checkpoint. |
 | App closed or crashed mid-run | Restored on launch with a Resume banner. |
-| Corrupt or missing database | Notice offering a fresh session; never a crash on launch. |
+| Corrupt or missing database | The unreadable session or checkpoint file is renamed with a `.corrupt-<timestamp>` suffix and a fresh one is started, with a notice; never a crash on launch. |
 
 ## Security
 
