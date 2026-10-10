@@ -103,7 +103,8 @@ A `hosted` config flag turns on a public-only guard in `fetch.py`:
 
 - Allow only http and https. Reject embedded credentials. Allow only ports 80, 443, 8080 and 8443.
 - Resolve the hostname and reject private, loopback, link-local, multicast and reserved addresses, including IPv6 and IPv4-mapped forms and numeric host tricks (`0x7f.1`, `2130706433`). `localhost` is no longer treated as a default-http host.
-- Follow redirects manually and re-validate every hop. Whether Scrapling's `Fetcher` can disable automatic redirects is **unverified**; the plan checks this first. If it cannot, redirects are validated by an egress proxy.
+- Redirects: Scrapling's `Fetcher` takes `follow_redirects="safe"` (its default), which makes curl refuse a redirect to a private or loopback address; this was confirmed by running it against a local redirecting server. The fetcher passes it explicitly, with a redirect cap of 5, and a test pins both.
+- Hosts written as numbers are rejected unless they are plain dotted-decimal (`0177.0.0.1`, `0x7f.1` and `2130706433` are refused), because the system resolver and curl can read them differently.
 - DNS rebinding cannot be fully closed in application code, so the Python host must also run with network egress rules that block private ranges and the cloud metadata address. This is required, not optional.
 
 ### Fetch modes

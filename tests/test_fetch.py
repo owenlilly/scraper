@@ -191,3 +191,57 @@ def test_config_fetch_modes_match_the_fetcher():
     assert FETCH_MODES == MODES
 
 
+# ---- redirects never reach private addresses -----------------------------------
+
+
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        port = self.server.server_port
+        if self.path == "/to-loopback":
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}/secret")
+            self.end_headers()
+        elif self.path == "/loop":
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}/loop")
+            self.end_headers()
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><title>secret</title><body>internal data</body></html>")
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def redirecting_server():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def test_fast_mode_refuses_a_redirect_to_a_private_address(redirecting_server):
+    from scraper.fetch import _fast
+
+    with pytest.raises(Exception, match="Redirect to internal IP"):
+        _fast(f"{redirecting_server}/to-loopback", 5.0)
+
+
+def test_fast_mode_passes_safe_redirects_and_a_redirect_cap_explicitly(monkeypatch):
+    seen = {}
+
+    class FakeFetcher:
+        @staticmethod
+        def get(url, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(status=200)
+
+    monkeypatch.setattr("scrapling.fetchers.Fetcher", FakeFetcher)
+    from scraper.fetch import _fast
+
+    _fast("https://example.test/", 5.0)
+    assert seen["follow_redirects"] == "safe"
+    assert seen["max_redirects"] == 5
