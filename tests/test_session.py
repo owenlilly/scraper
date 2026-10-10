@@ -979,3 +979,41 @@ def test_the_agent_prompt_advises_other_modes_only_when_they_exist():
     assert "Only the fast fetch mode is available" in hosted
 
 
+# ---- the browser goes away mid-run ---------------------------------------------
+
+
+async def test_a_dropped_connection_leaves_the_run_stopped_and_resumable():
+    web = {A: make_page(A, markdown="# A\n\nText.")}
+    session, _ = agent_session(web, [ai("", call("fetch_page", url=A)), ai("All done.")])
+    stream = session.run_agent(f"read {A}", "qwen-test")
+    first = await anext(stream)  # the browser read one event, then went away
+    assert first.kind in ("step", "reasoning", "answer", "tool_start")
+    await stream.aclose()
+    assert session.busy is False  # nothing else is blocked behind the dead stream
+    assert session.run.status == "running"  # nobody has said otherwise yet
+    session.release_after_disconnect()
+    assert session.run.status == "stopped" and session.resumable
+    events = await proceed_all(session)
+    assert events[-1].kind == "done" and session.run.status == "done"
+
+
+async def test_messages_the_agent_never_read_are_handed_back_when_the_connection_drops():
+    web = {A: make_page(A)}
+    session, _ = agent_session(web, [ai("", call("fetch_page", url=A)), ai("All done.")])
+    stream = session.run_agent(f"read {A}", "qwen-test")
+    await anext(stream)
+    assert session.steer("also the footer").status == "queued"
+    await stream.aclose()
+    session.release_after_disconnect()
+    assert session.take_stopped_drafts() == ["also the footer"]
+
+
+async def test_releasing_after_a_disconnect_leaves_finished_and_paused_runs_alone():
+    session = await paused_session()
+    session.release_after_disconnect()
+    assert session.run.status == "paused"
+    done, _ = agent_session({}, [ai("Nothing to fetch.")])
+    await run_all(done, "say hi")
+    done.release_after_disconnect()
+    assert done.run.status == "done"
+    Session(CFG, FakeLLM(), make_fetch({})).release_after_disconnect()  # no run at all: nothing to do

@@ -181,6 +181,16 @@ class Session:
         if self.run is not None and self.run.status == "running":
             self._stopped_drafts.extend(self._take_undelivered())  # Stop means stop: hand unread messages back
 
+    def release_after_disconnect(self) -> None:
+        """The browser went away while a run was streaming. The run stops here and can be resumed, as after a crash."""
+        run = self.run
+        if run is None or run.status != "running":
+            return
+        self._stopped_drafts.extend(self._take_undelivered())
+        run.status = "stopped"
+        run.pending = None
+        self._save_run()
+
     def steer(self, text: str) -> SteerResult:
         """Queue a message for the live run to read before its next model call."""
         run = self.run
