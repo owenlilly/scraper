@@ -52,6 +52,15 @@ describe("loadEnv", () => {
     expect(loadEnv(withKey).emailTransport).toBe("resend");
   });
 
+  it("reads the proxies in front of the app, and defaults to none", () => {
+    expect(loadEnv(GOOD).trustedProxies).toEqual([]);
+    expect(loadEnv({ ...GOOD, TRUSTED_PROXIES: "10.0.0.0/8, 192.0.2.7 ,2001:db8::/32," }).trustedProxies).toEqual(["10.0.0.0/8", "192.0.2.7", "2001:db8::/32"]);
+  });
+
+  it.each(["not-an-address", "10.0.0.0/99", "10.0.0.256", "10.0.0.0/", "10.0.0.0/8/8", "https://proxy.example"])("rejects the proxy entry %j", (entry) => {
+    expect(() => loadEnv({ ...GOOD, TRUSTED_PROXIES: entry })).toThrow(/TRUSTED_PROXIES/);
+  });
+
   it("rejects a malformed admin email and a bad transport name", () => {
     expect(() => loadEnv({ ...GOOD, ADMIN_EMAIL: "not an email" })).toThrow(/ADMIN_EMAIL/);
     expect(() => loadEnv({ ...GOOD, EMAIL_TRANSPORT: "smoke-signals" })).toThrow(/EMAIL_TRANSPORT/);

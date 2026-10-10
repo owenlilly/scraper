@@ -66,7 +66,9 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     },
     session: { expiresIn: 7 * DAY, updateAge: DAY },
     user: { deleteUser: { enabled: true, beforeDelete: async (user) => eraseApiData(user.id) } },
-    advanced: { useSecureCookies: env.production },
+    // The rate limiter keys on the client's address from `x-forwarded-for`. Without named proxies that header must hold exactly one address,
+    // or everyone shares one bucket; with them, the chain is read from the right, skipping the proxies.
+    advanced: { useSecureCookies: env.production, ...(env.trustedProxies.length ? { ipAddress: { trustedProxies: env.trustedProxies } } : {}) },
     rateLimit: { enabled: env.production, storage: "database", window: 60, max: 60 },
     hooks: {
       // Invite-only: an account can be created only with the single-use token that was emailed to that exact address.

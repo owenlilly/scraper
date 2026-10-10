@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 /** The web app's settings, read from the environment once and checked up front so a mistake fails at start-up, by name. */
 
 export type WebEnv = {
@@ -12,6 +14,7 @@ export type WebEnv = {
   emailFrom: string;
   adminEmail: string | null;
   trustedOrigins: string[];
+  trustedProxies: string[];
   inviteTtlDays: number;
   production: boolean;
 };
@@ -28,6 +31,16 @@ function isHttpUrl(value: string): boolean {
 }
 
 const trimSlash = (value: string) => value.replace(/\/+$/, "");
+
+/** An IPv4 or IPv6 address, or a range such as 10.0.0.0/8. */
+function isProxyEntry(entry: string): boolean {
+  const parts = entry.split("/");
+  if (parts.length > 2) return false;
+  const family = isIP(parts[0]);
+  if (!family) return false;
+  if (parts.length === 1) return true;
+  return /^\d{1,3}$/.test(parts[1]) && Number(parts[1]) <= (family === 4 ? 32 : 128);
+}
 
 export function loadEnv(source: Source = process.env): WebEnv {
   const problems: string[] = [];
@@ -70,6 +83,12 @@ export function loadEnv(source: Source = process.env): WebEnv {
     .filter(Boolean);
   for (const origin of trustedOrigins) if (!isHttpUrl(origin.replace("*", "x"))) problems.push("TRUSTED_ORIGINS holds an entry that is not an address");
 
+  const trustedProxies = get("TRUSTED_PROXIES")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const entry of trustedProxies) if (!isProxyEntry(entry)) problems.push("TRUSTED_PROXIES holds an entry that is not an IP address or a range such as 10.0.0.0/8");
+
   const ttl = Number(get("INVITE_TTL_DAYS") || "7");
   if (!Number.isInteger(ttl) || ttl < 1 || ttl > 30) problems.push("INVITE_TTL_DAYS must be a whole number from 1 to 30");
 
@@ -77,6 +96,6 @@ export function loadEnv(source: Source = process.env): WebEnv {
 
   return {
     databaseUrl, authSecret, baseUrl, apiUrl, apiAudience, serviceSecret, emailTransport, resendApiKey, emailFrom,
-    adminEmail: adminRaw || null, trustedOrigins, inviteTtlDays: ttl, production,
+    adminEmail: adminRaw || null, trustedOrigins, trustedProxies, inviteTtlDays: ttl, production,
   };
 }

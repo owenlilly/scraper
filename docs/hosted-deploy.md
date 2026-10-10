@@ -121,7 +121,11 @@ Settings that must agree between the web app and the API (the most common mistak
 | `API_URL` | the API's public address | Where account deletions are sent |
 | the app's own origin | `SCRAPER_CORS_ORIGINS` | So the browser may call the API directly |
 
-The first administrator: set `ADMIN_EMAIL` and sign up with that address. It needs no invitation and becomes the administrator; after that, everyone needs an invitation (sent from the administrator's invitation routes), and `ADMIN_EMAIL` stops having any effect.
+Rate limits (sign-in, sign-up and password reset attempts) are kept per visitor, using the address in the `x-forwarded-for` header. Better Auth trusts that header only when it holds exactly one address. That is the case when the app is reached directly on Vercel. **If another proxy or CDN sits in front of the app** (Cloudflare, for example), the header holds more than one address and, unless you name those proxies, every visitor shares one bucket of three sign-ins per ten seconds, which would lock everyone out. Set `TRUSTED_PROXIES` to the proxies' addresses or ranges (comma-separated, such as `10.0.0.0/8, 192.0.2.7`) and the limits go back to being per visitor.
+
+The first administrator: set `ADMIN_EMAIL` and sign up with that address. It needs no invitation and becomes the administrator. While an administrator exists, `ADMIN_EMAIL` has no special power and everyone needs an invitation (sent from the administrator's invitation routes). If the last administrator is ever deleted or demoted, that address can sign up without an invitation again.
+
+**Sign up as the administrator as soon as you deploy.** Until you do, anyone who knows `ADMIN_EMAIL` can start that sign-up with a password of their own. The confirmation email goes to the real owner of the address, so the account is only usable if the owner clicks a confirmation link they did not ask for. If an unexpected confirmation email arrives for that address, do not click it.
 
 ### Known limitations
 

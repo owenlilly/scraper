@@ -12,7 +12,7 @@ export const PASSWORD = "correct horse battery staple";
 export type Harness = Awaited<ReturnType<typeof makeHarness>>;
 
 /** The real Better Auth, on a real Postgres, with a mailbox in place of email and a stand-in for the Python API. */
-export async function makeHarness(options: { adminEmail?: string | null; accountData?: AccountDataClient; inviteTtlDays?: number; production?: boolean } = {}) {
+export async function makeHarness(options: { adminEmail?: string | null; accountData?: AccountDataClient; inviteTtlDays?: number; production?: boolean; trustedProxies?: string } = {}) {
   const pool: Pool = await freshSchema();
   const base = options.production ? "https://app.example.com" : BASE;
   const sent: EmailMessage[] = [];
@@ -29,6 +29,7 @@ export async function makeHarness(options: { adminEmail?: string | null; account
     ...(options.production ? { NODE_ENV: "production", RESEND_API_KEY: "re_test", EMAIL_FROM: "Page Chat <no-reply@example.com>" } : {}),
     ADMIN_EMAIL: options.adminEmail === null ? "" : (options.adminEmail ?? "owner@example.com"),
     INVITE_TTL_DAYS: String(options.inviteTtlDays ?? 7),
+    ...(options.trustedProxies ? { TRUSTED_PROXIES: options.trustedProxies } : {}),
   });
   const services: Services = buildServices(env, { pool, sendEmail: async (message) => void sent.push(message), accountData });
   await migrate(services.auth, pool);
