@@ -87,8 +87,20 @@ Settings come from environment variables, or from a `.env` file in the directory
 
 The provider status in the footer re-checks every 15 seconds.
 
+## Hosted API
+
+`python -m scraper_api` serves the same agent to many signed-in people from one Postgres-backed process, for the Next.js web app. Setup, settings, the required network rules and a database role layout are in [docs/hosted-deploy.md](docs/hosted-deploy.md). The local app above is unchanged.
+
 ## Tests
 
 ```bash
 uv run pytest
+```
+
+The Postgres tests are skipped unless `SCRAPER_TEST_DATABASE_URL` points at a database they may fill and empty (use a scratch one). A run with it unset still reports green, so check the summary says `0 skipped` before you trust it:
+
+```bash
+podman run -d --name scraper-test-db -e POSTGRES_PASSWORD=test -e POSTGRES_DB=scraper_test -p 127.0.0.1:55432:5432 docker.io/library/postgres:17
+export SCRAPER_TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/scraper_test
+uv run pytest -rs
 ```
