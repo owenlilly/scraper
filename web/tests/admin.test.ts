@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { adminInviteHandlers } from "../src/lib/admin-invites";
+import { parseInviteHash } from "../src/lib/invite-link";
 import { BASE, makeHarness, type Harness } from "./harness";
 
 let h: Harness;
@@ -60,15 +61,17 @@ describe("invitation routes", () => {
     const mail = h.lastEmailTo("new.person@example.com")!;
     expect(mail.subject).toBe("You are invited to Page Chat");
     const link = new URL(h.linkIn(mail));
+    const invite = parseInviteHash(link.hash)!;
     expect(link.origin + link.pathname).toBe(`${BASE}/sign-up`);
-    expect(link.searchParams.get("email")).toBe("new.person@example.com");
-    expect(text).not.toContain(link.searchParams.get("invite")!);
+    expect(link.search).toBe(""); // the token is after the #, so a server never sees it
+    expect(invite.email).toBe("new.person@example.com");
+    expect(text).not.toContain(invite.invite);
   });
 
   it("send a link that really lets that person sign up, once", async () => {
     await handlers.create(request("POST", { email: "linked@example.com" }, admin));
     const link = new URL(h.linkIn(h.lastEmailTo("linked@example.com")!));
-    const token = link.searchParams.get("invite")!;
+    const token = parseInviteHash(link.hash)!.invite;
     expect((await h.signUp("linked@example.com", token)).status).toBe(200);
     expect((await h.signUp("linked@example.com", token)).status).toBe(403);
   });

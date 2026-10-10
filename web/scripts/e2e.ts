@@ -81,7 +81,7 @@ async function main() {
   assert.equal(created.status, 201);
   const link = new URL(await emailLink("bob@example.com", "You are invited to Page Chat"));
   assert.equal(link.pathname, "/sign-up");
-  const inviteToken = link.searchParams.get("invite")!;
+  const inviteToken = new URLSearchParams(link.hash.slice(1)).get("invite")!;
   assert.equal((await web("/api/auth/sign-up/email", { method: "POST", body: JSON.stringify({ email: "mallory@example.com", password: PASSWORD, name: "m" }), headers: { "x-invite-token": inviteToken } })).status, 403);
   const bob = await join("bob@example.com", inviteToken);
   ok(`bob joined with the emailed link as ${bob.id}; the same link cannot make someone else's account`);

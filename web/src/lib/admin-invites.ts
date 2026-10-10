@@ -1,4 +1,5 @@
 import { inviteMessage } from "./email";
+import { buildInviteLink } from "./invite-link";
 import { normalizeEmail, type Invite } from "./invites";
 import type { Services } from "./services";
 
@@ -55,7 +56,7 @@ export function adminInviteHandlers(services: Services) {
       const existing = await pool.query(`SELECT 1 FROM auth."user" WHERE lower(email) = $1`, [email]);
       if (existing.rowCount) return fail(409, "already_has_account", "That address already has an account.");
       const { invite, token } = await invites.create(email, admin.userId);
-      const url = `${env.baseUrl}/sign-up?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+      const url = buildInviteLink(env.baseUrl, token, email);
       try {
         await sendEmail(inviteMessage({ to: email, url, ttlDays: env.inviteTtlDays }));
       } catch {

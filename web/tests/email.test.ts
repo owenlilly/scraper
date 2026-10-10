@@ -47,13 +47,13 @@ describe("logSender", () => {
 });
 
 describe("message templates", () => {
-  const url = "https://app.test/sign-up?invite=tok&email=a%40x.test";
+  const url = "https://app.test/sign-up#invite=tok&email=a%40x.test";
 
   it("put the link in both the text and the html", () => {
     for (const message of [inviteMessage({ to: "a@x.test", url, ttlDays: 7 }), verifyMessage({ to: "a@x.test", url }), resetMessage({ to: "a@x.test", url })]) {
       expect(message.to).toBe("a@x.test");
       expect(message.text).toContain(url);
-      expect(message.html).toContain("https://app.test/sign-up?invite=tok&amp;email=a%40x.test"); // escaped for html
+      expect(message.html).toContain("https://app.test/sign-up#invite=tok&amp;email=a%40x.test"); // escaped for html
     }
   });
 
