@@ -3,7 +3,7 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { admin, jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
-import type { AccountDataClient } from "./account-data";
+import { AccountDataError, type AccountDataClient } from "./account-data";
 import { resetMessage, verifyMessage, type EmailSender } from "./email";
 import type { WebEnv } from "./env";
 import { InviteStore, normalizeEmail } from "./invites";
@@ -48,6 +48,7 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
       sendVerificationEmail: async ({ user, url }) => sendEmail(verifyMessage({ to: user.email, url })),
     },
     session: { expiresIn: 7 * DAY, updateAge: DAY },
+    user: { deleteUser: { enabled: true } },
     hooks: {
       // Invite-only: an account can be created only with the single-use token that was emailed to that exact address.
       before: createAuthMiddleware(async (ctx) => {
@@ -63,6 +64,20 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
         create: {
           before: async (user) => ((await mayBecomeFirstAdmin(user.email)) ? { data: { ...user, role: "admin" } } : { data: user }),
           after: async (user) => invites.consume(user.email),
+        },
+        delete: {
+          // The Python API's copy of the person's data goes first. If that cannot be done, the account stays and the deletion can be retried.
+          before: async (user) => {
+            try {
+              await accountData.delete(user.id);
+            } catch (error) {
+              const status = error instanceof AccountDataError ? error.status : 0;
+              throw new APIError(status === 409 ? "CONFLICT" : "BAD_GATEWAY", {
+                message: status === 409 ? "A run is still stopping. Try again in a few seconds." : "Could not delete your data. Try again shortly.",
+                code: "ACCOUNT_DATA_NOT_DELETED",
+              });
+            }
+          },
         },
       },
     },
