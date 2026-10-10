@@ -49,6 +49,8 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     },
     session: { expiresIn: 7 * DAY, updateAge: DAY },
     user: { deleteUser: { enabled: true } },
+    advanced: { useSecureCookies: env.production },
+    rateLimit: { enabled: env.production, storage: "database", window: 60, max: 60 },
     hooks: {
       // Invite-only: an account can be created only with the single-use token that was emailed to that exact address.
       before: createAuthMiddleware(async (ctx) => {
