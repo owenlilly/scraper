@@ -361,6 +361,12 @@ class Session:
         return kept, used
 
     async def ask(self, question: str, model: str) -> AsyncIterator[Event]:
+        with self._exclusive():  # a question holds the session like a run does: two at once would interleave the chat history
+            async with aclosing(self._ask(question, model)) as events:
+                async for event in events:
+                    yield event
+
+    async def _ask(self, question: str, model: str) -> AsyncIterator[Event]:
         self.last_ask_interrupted = False
         if not self.pages:
             yield Event("error", "Scrape a page first.")

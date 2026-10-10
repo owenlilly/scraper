@@ -42,6 +42,7 @@ def stream_response(deps: Deps, entry: Entry, make_events: Callable[[], AsyncIte
 
     async def body():
         session = entry.session
+        owned = True  # false when this stream never got the session, so it must not touch the run that did
         try:
             with deps.slots.hold():
                 async with aclosing(make_events()) as events:
@@ -57,8 +58,10 @@ def stream_response(deps: Deps, entry: Entry, make_events: Callable[[], AsyncIte
                 },
             )
         except TooBusy as exc:
+            owned = False
             yield error_frame("server_busy", str(exc))
         except SessionBusy as exc:
+            owned = False
             yield error_frame("busy", str(exc))
         except UsageLimitReached as exc:
             yield error_frame("limit", str(exc))
@@ -66,7 +69,8 @@ def stream_response(deps: Deps, entry: Entry, make_events: Callable[[], AsyncIte
             log.error("stream failed: %s", type(exc).__name__)
             yield error_frame("server_error", "Something went wrong on the server. Your session is saved.")
         finally:
-            session.release_after_disconnect()  # a no-op unless the browser left while the run was live
+            if owned:
+                session.release_after_disconnect()  # a no-op unless the browser left while the run was live
 
     return StreamingResponse(body(), media_type="text/event-stream", headers=STREAM_HEADERS)
 

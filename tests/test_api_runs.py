@@ -275,3 +275,18 @@ async def test_an_unexpected_failure_mid_stream_becomes_a_plain_error_frame_that
     assert "server_error" in text and "secret page text" not in text
     assert api.deps.slots.active == 0
 
+
+
+async def test_a_stream_that_loses_the_race_for_the_session_leaves_the_live_run_alone(api):
+    from scraper.store import RunRecord
+    from scraper_api.streams import stream_response
+
+    entry = await api.deps.registry.get("alice")
+    entry.session.run = RunRecord(number=1, instruction="long task", status="running", followups=[{"id": "f1", "text": "also the SKU", "delivered": False}])
+    entry.session.busy = True  # another stream owns the session and is running
+    chunks = [c async for c in stream_response(api.deps, entry, lambda: entry.session.ask("q?", MODEL)).body_iterator]
+    text = b"".join(chunks).decode()
+    assert '"code": "busy"' in text
+    assert entry.session.run.status == "running"  # the loser must not mark the winner's run as stopped
+    assert entry.session.run.followups[0]["delivered"] is False and entry.session.take_stopped_drafts() == []
+    assert api.deps.slots.active == 0

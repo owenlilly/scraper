@@ -1020,3 +1020,29 @@ async def test_releasing_after_a_disconnect_leaves_finished_and_paused_runs_alon
     done.release_after_disconnect()
     assert done.run.status == "done"
     Session(CFG, FakeLLM(), make_fetch({})).release_after_disconnect()  # no run at all: nothing to do
+
+
+# ---- a question holds the session like any other work ----------------------------------------------------------------------
+
+
+async def test_a_question_cannot_start_while_the_session_is_busy():
+    web = {A: make_page(A)}
+    session = make_session(web)
+    await session.scrape(A)
+    session.busy = True
+    with pytest.raises(SessionBusy):
+        await anext(session.ask("q?", "qwen-test"))
+
+
+async def test_a_second_question_is_refused_while_the_first_is_streaming_and_the_session_is_free_afterwards():
+    web = {A: make_page(A)}
+    llm = FakeLLM(events=[Event("answer", "one"), Event("answer", "two")])
+    session = make_session(web, llm)
+    await session.scrape(A)
+    first = session.ask("first?", "qwen-test")
+    await anext(first)  # the first answer is mid-stream
+    with pytest.raises(SessionBusy):
+        await anext(session.ask("second?", "qwen-test"))
+    await first.aclose()
+    assert session.busy is False
+    assert [e.kind async for e in session.ask("third?", "qwen-test")] == ["answer", "answer"]
