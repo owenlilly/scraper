@@ -182,3 +182,12 @@ def test_parse_html_keeps_raw_html_for_selectors_without_polluting_repr_or_equal
     assert "<h1>Welcome</h1>" in page.html
     assert "html=" not in repr(page)
     assert page == replace(page, html="something else")
+
+
+def test_config_fetch_modes_match_the_fetcher():
+    from scraper.config import FETCH_MODES
+    from scraper.fetch import MODES
+
+    assert FETCH_MODES == MODES
+
+
