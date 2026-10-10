@@ -30,7 +30,7 @@ def test_a_valid_fetch_is_checked_charged_and_passed_on():
     base = Spy()
     fetch_fn, meter, checks = build(base)
     page = fetch_fn("example.test/a", "fast", timeout=7.0)
-    assert page is base.result
+    assert page == base.result  # equal, not identical: the page is copied when it is cut to the cap
     assert checks == ["https://example.test/a"]  # the scheme is added before the address check
     assert base.calls == [("https://example.test/a", "fast", 7.0)]
     assert meter.snapshot()["pages"] == 1
@@ -96,3 +96,27 @@ def test_a_retry_suggestion_for_an_available_mode_is_kept():
     with pytest.raises(FetchError) as caught:
         fetch_fn("https://example.test/")
     assert caught.value.retry_mode == "stealthy"
+
+
+# ---- a page is cut to the cap before the session keeps it --------------------------------------------------------------
+
+
+def test_a_page_longer_than_the_cap_is_cut_before_the_session_keeps_it():
+    big = make_page("https://example.test/", title="Big", markdown="m" * 1000, links=["https://example.test/next"], html="h" * 1000)
+    fetch_fn, _, _ = build(Spy(result=big), cfg=Config(hosted=True, max_page_chars=200))
+    page = fetch_fn("https://example.test/")
+    assert len(page.markdown) == 200 and len(page.html) == 200
+    assert page.markdown.endswith("[The rest of this page was cut off to save space.]")  # the model is told it is reading a part
+    assert (page.url, page.title, page.links) == (big.url, "Big", big.links)
+
+
+def test_a_page_within_the_cap_is_returned_unchanged():
+    small = make_page("https://example.test/", markdown="short", html="<p>short</p>")
+    fetch_fn, _, _ = build(Spy(result=small), cfg=Config(hosted=True, max_page_chars=200))
+    assert fetch_fn("https://example.test/") == small
+
+
+def test_a_cap_smaller_than_the_notice_still_never_exceeds_the_cap():
+    fetch_fn, _, _ = build(Spy(result=make_page("https://example.test/", markdown="m" * 500, html="h" * 500)), cfg=Config(hosted=True, max_page_chars=10))
+    page = fetch_fn("https://example.test/")
+    assert len(page.markdown) <= 10 and len(page.html) <= 10
