@@ -109,6 +109,14 @@ describe("how a turn ends", () => {
     expect(run([start(), { type: "failed", message: "The connection was lost.", resumable: true }])).toMatchObject({ resumable: true });
   });
 
+  it("goes back to exactly what was on screen when a continuation is refused", () => {
+    const before = run([start(), ...frames(event("error", { text: "Daily limit." }), endFrame())])!;
+    const resumed = run([{ type: "resume" }], before)!;
+    expect(resumed.status).toBe("streaming");
+    expect(run([{ type: "restore", turn: before }], resumed)).toEqual(before);
+    expect(run([{ type: "restore", turn: null }], resumed)).toBeNull();
+  });
+
   it("can be continued after a pause or a stop, keeping what it had", () => {
     const paused = run([start(), ...frames(event("tool_start", { name: "fetch_page" }), event("tool_result", { text: "ok" }), event("needs_input", { payload: { kind: "ask", question: "?", options: [] } }), endFrame())])!;
     const again = run([{ type: "resume" }], paused)!;

@@ -83,6 +83,12 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
     }
   }
 
+  /** Runs a request that carries on from something already on screen, and says why when the server refuses it. */
+  async function continueWith(go: () => Promise<string | null>) {
+    setProblem(null);
+    setProblem(await go());
+  }
+
   async function readPage() {
     setReading(true);
     try {
@@ -121,15 +127,15 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
             }}
           />
         ) : (
-          <Thread items={items} onRetry={retryable && model ? () => void run.retry(state.history.at(-2)?.content ?? "", model) : undefined} />
+          <Thread items={items} onRetry={retryable && model ? () => void continueWith(() => run.retry(state.history.at(-2)?.content ?? "", model)) : undefined} />
         )}
       </div>
       <RunPanel
         panel={panel}
         pagesRead={pagesRead}
         onStop={() => void run.stop()}
-        onResume={() => void run.proceed(state.run)}
-        onAnswer={(value) => void run.answer(value, state.run)}
+        onResume={() => void continueWith(() => run.proceed(state.run))}
+        onAnswer={(value) => void continueWith(() => run.answer(value, state.run))}
         onDiscard={() => void run.discard()}
       />
       <Composer

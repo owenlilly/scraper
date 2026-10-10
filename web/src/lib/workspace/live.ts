@@ -33,6 +33,7 @@ export type LiveAction =
   | { type: "queued"; id: string; text: string }
   | { type: "failed"; message: string; resumable?: boolean }
   | { type: "resume" }
+  | { type: "restore"; turn: LiveTurn | null }
   | { type: "clear" };
 
 export const LIMIT_MESSAGES: Record<string, string> = {
@@ -142,6 +143,8 @@ export function liveReducer(state: LiveTurn | null, action: LiveAction): LiveTur
       return begin(action.kind, action.text, action.from);
     case "clear":
       return null;
+    case "restore":
+      return action.turn;
     case "frame":
       return state ? applyFrame(state, action.event, action.data) : null;
     case "queued":

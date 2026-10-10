@@ -243,6 +243,55 @@ test.describe("a run that needs a decision", () => {
     await expect(page.getByText("Finished after coming back.")).toBeVisible();
   });
 
+  test("a refused Resume says why and keeps the Resume button", async ({ page }) => {
+    await model.script([{ hold: "first", toolCalls: [ADD_TWO] }]);
+    const member = await signedIn(page, "refused");
+    await say(page, "Collect the plans.");
+    await page.getByRole("button", { name: "Stop" }).click();
+    await model.release("first");
+    const card = page.getByRole("status").filter({ hasText: "This run was stopped." });
+    await expect(card).toBeVisible();
+    await seedUsage(member.id, 300);
+    await card.getByRole("button", { name: "Resume" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Daily model-call limit reached" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Resume" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Discard this run" })).toBeVisible();
+  });
+
+  test("an answer the server refuses leaves the question to answer again", async ({ page }) => {
+    await model.script([{ toolCalls: [{ name: "ask_user", args: { question: "Which price?", options: ["Monthly"] } }] }]);
+    const member = await signedIn(page, "refusedanswer");
+    await say(page, "Collect the plans.");
+    const question = page.getByRole("group", { name: "Which price?" });
+    await expect(question).toBeVisible();
+    await seedUsage(member.id, 300);
+    await question.getByRole("button", { name: "Monthly" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Daily model-call limit reached" })).toBeVisible();
+    await expect(question.getByRole("button", { name: "Monthly" })).toBeVisible();
+  });
+
+  test("Ask again shows why when the server refuses it", async ({ page }) => {
+    const member = await createMember("retry");
+    const id = await userIdOf(member.cookie);
+    await seedSession(id, { pages: PLAN_PAGES, history: [{ role: "user", content: "What does Team cost?" }, { role: "assistant", content: "The Team plan co", interrupted: true }] });
+    await seedUsage(id, 300);
+    await signInBrowser(page.context(), member.cookie);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Ask again" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Daily model-call limit reached" })).toBeVisible();
+  });
+
+  test("an API that rejects the token shows an error with a way out, not a redirect loop", async ({ page, context }) => {
+    const member = await createMember("rejected");
+    await signInBrowser(context, member.cookie);
+    await page.route(`${env.api}/state`, (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: { code: "unauthorized", message: "The server did not accept your sign-in." } }) }));
+    await page.goto("/");
+    await expect(page.getByRole("alert").filter({ hasText: "The server did not accept your sign-in." })).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  });
+
   test("a run stopped before the page was opened is still there after a reload", async ({ page }) => {
     await model.script([{ hold: "first", toolCalls: [ADD_TWO] }]);
     await signedIn(page, "reload");

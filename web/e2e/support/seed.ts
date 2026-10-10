@@ -7,7 +7,7 @@ import pg from "pg";
 import { env } from "./env";
 
 export type SeedPage = { url: string; title: string; markdown?: string };
-export type SeedMessage = { role: "user" | "assistant"; content: string; note?: string; trace?: { name: string; args: Record<string, unknown>; text: string; ok: boolean }[] };
+export type SeedMessage = { role: "user" | "assistant"; content: string; note?: string; interrupted?: boolean; trace?: { name: string; args: Record<string, unknown>; text: string; ok: boolean }[] };
 
 /** The id Better Auth gave this person, read from their session cookie. */
 export async function userIdOf(cookie: string): Promise<string> {
@@ -34,8 +34,8 @@ export async function seedSession(userId: string, seed: { pages?: SeedPage[]; ro
     for (const row of seed.rows ?? []) await client.query("INSERT INTO app.rows (user_id, data) VALUES ($1, $2::json)", [userId, JSON.stringify(row)]);
     for (const message of seed.history ?? []) {
       await client.query(
-        "INSERT INTO app.history (user_id, role, content, reasoning, sources, interrupted, note, trace) VALUES ($1, $2, $3, '', '[]'::jsonb, false, $4, $5::jsonb)",
-        [userId, message.role, message.content, message.note ?? "", JSON.stringify(message.trace ?? [])],
+        "INSERT INTO app.history (user_id, role, content, reasoning, sources, interrupted, note, trace) VALUES ($1, $2, $3, '', '[]'::jsonb, $6, $4, $5::jsonb)",
+        [userId, message.role, message.content, message.note ?? "", JSON.stringify(message.trace ?? []), message.interrupted ?? false],
       );
     }
     await client.query("COMMIT");

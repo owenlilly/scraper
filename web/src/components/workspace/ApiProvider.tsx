@@ -8,9 +8,12 @@ import { createTokenCache } from "../../lib/api/token";
 
 const ApiContext = createContext<ApiClient | null>(null);
 
+/** The code of the error thrown when Better Auth will not issue a token: only this one means "go back to sign in". */
+export const SESSION_ENDED = "session_ended";
+
 async function fetchToken(): Promise<string> {
   const { data, error } = await authClient.token();
-  if (error || !data?.token) throw new ApiError(401, "unauthorized", "Your session has ended. Sign in again.");
+  if (error || !data?.token) throw new ApiError(401, SESSION_ENDED, "Your session has ended. Sign in again.");
   return data.token;
 }
 

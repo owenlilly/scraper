@@ -6,7 +6,8 @@ import { ApiError } from "../../lib/api/client";
 import { useRun } from "../../lib/workspace/run";
 import { useWorkspaceState, useRefreshState } from "../../lib/workspace/state";
 import type { Person } from "./AccountMenu";
-import { useApi } from "./ApiProvider";
+import { SESSION_ENDED, useApi } from "./ApiProvider";
+import { SignOutButton } from "../SignOutButton";
 import { Dialog } from "../Dialog";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { ResultsPane } from "./ResultsPane";
@@ -27,7 +28,9 @@ export function Workspace({ person }: { person: Person }) {
   const run = useRun({ onNotice: setToast, onDrafts: useCallback((texts: string[]) => setDrafts(texts), []) });
 
   useEffect(() => {
-    if (state.error instanceof ApiError && state.error.status === 401) router.replace("/sign-in");
+    // Only when Better Auth itself ends the session. An API that rejects a token it was given (a mismatched setting, say) must not send
+    // the person to sign in, because sign-in sends them straight back here.
+    if (state.error instanceof ApiError && state.error.code === SESSION_ENDED) router.replace("/sign-in");
   }, [state.error, router]);
   useEffect(() => {
     if (!toast) return;
@@ -48,6 +51,7 @@ export function Workspace({ person }: { person: Person }) {
               <button className="btn" type="button" onClick={() => state.refetch()}>
                 Try again
               </button>
+              <SignOutButton />
             </>
           ) : (
             <p>Loading your workspace</p>

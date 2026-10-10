@@ -42,7 +42,8 @@ export function useRun(options: { onNotice: (text: string) => void; onDrafts: (d
       const controller = new AbortController();
       abort.current = controller;
       // `mirror` follows the same actions the screen gets, so what the turn ended as is known here without waiting for a render.
-      let mirror = liveReducer(liveRef.current, begin);
+      const before = liveRef.current; // what was on screen, to go back to when the server refuses a continuation
+      let mirror = liveReducer(before, begin);
       dispatch(begin);
       const batcher = createBatcher<LiveAction>((actions) => actions.forEach(dispatch));
       // While the run works, the results table and the page list follow along, a few times a second at most.
@@ -72,8 +73,10 @@ export function useRun(options: { onNotice: (text: string) => void; onDrafts: (d
       if (refreshTimer) clearTimeout(refreshTimer);
       if (abort.current === controller) abort.current = null;
       if (controller.signal.aborted || !mirror) return null;
-      if (refused && begin.type === "start" && !begin.from) {
-        dispatch({ type: "clear" }); // nothing began, so nothing is left to show: the caller keeps the person's text and says why
+      if (refused) {
+        // Nothing began. A new request leaves nothing to show (the caller keeps the person's text and says why); a continuation
+        // goes back to the question, the Resume button or the failure notice it started from, so the person can try again.
+        dispatch(begin.type === "start" && !begin.from ? { type: "clear" } : { type: "restore", turn: before });
         return refused;
       }
 

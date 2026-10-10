@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense } from "react";
+import { lazy, memo, Suspense } from "react";
 
 // The formatting library is the largest piece of the page and an answer only needs it once there is one, so it loads on demand.
 const Markdown = lazy(() => import("./Markdown"));
@@ -18,7 +18,8 @@ function PlainText({ text }: { text: string }) {
   );
 }
 
-export function Prose({ text }: { text: string }) {
+// Memoized: while an answer streams, every earlier answer on screen keeps the same text and is not formatted again.
+export const Prose = memo(function Prose({ text }: { text: string }) {
   return (
     <div className="prose">
       <Suspense fallback={<PlainText text={text} />}>
@@ -26,4 +27,4 @@ export function Prose({ text }: { text: string }) {
       </Suspense>
     </div>
   );
-}
+});
