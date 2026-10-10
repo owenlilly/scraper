@@ -7,7 +7,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${E2E_DATABASE_URL:?set E2E_DATABASE_URL to a scratch database (its auth and app schemas are dropped)}"
-case "$E2E_DATABASE_URL" in *test*) ;; *) echo "refusing: the database name must contain 'test'" >&2; exit 2;; esac
+# Look at the database NAME only (between the first / after the host and any ?): a user, host or password that happens to say "test"
+# must not unlock a script that drops schemas.
+rest=${E2E_DATABASE_URL#*://}
+case "$rest" in */*) name=${rest#*/}; name=${name%%[?#]*} ;; *) name="" ;; esac
+case "$name" in *test*) ;; *) echo "refusing: the database name (\"$name\") must contain 'test', because this script drops its schemas" >&2; exit 2;; esac
 
 WEB_PORT=${WEB_PORT:-3100}; API_PORT=${API_PORT:-8180}
 WEB_URL="http://localhost:$WEB_PORT"; API_URL="http://localhost:$API_PORT"
