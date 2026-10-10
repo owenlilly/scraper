@@ -106,8 +106,6 @@ dialog::backdrop { background: rgba(10, 16, 14, 0.5); }
 dialog h2 { font-family: var(--font-read), Georgia, serif; font-size: var(--step-2); font-weight: 600; margin-bottom: 0.5rem; }
 dialog .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.1rem; flex-wrap: wrap; }
 
-.placeholder { padding: 2rem 1.25rem; display: grid; gap: 1rem; max-width: 40rem; }
-
 @media (max-width: 900px) {
   .topbar { padding-inline: 1rem; }
   .auth { padding-top: 2rem; }

@@ -25,7 +25,8 @@ test.describe("signing in", () => {
     await page.getByLabel("Password").fill(member.password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: `Signed in as ${member.email}` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What should it collect?" })).toBeVisible();
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL(/\/sign-in/);
     await page.goto("/");
@@ -59,7 +60,7 @@ test.describe("joining by invitation", () => {
     await expect(page.getByRole("heading", { name: "Check your inbox" })).toBeVisible();
     await page.goto(await emailLink(email, "Confirm your email address", since));
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: `Signed in as ${email}` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What should it collect?" })).toBeVisible();
   });
 
   test("a sign-up page opened without an invitation says one is needed", async ({ page }) => {
@@ -127,7 +128,7 @@ test.describe("forgotten passwords", () => {
     await page.getByLabel("Email address").fill(member.email);
     await page.getByLabel("Password").fill("a brand new passphrase");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: `Signed in as ${member.email}` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What should it collect?" })).toBeVisible();
   });
 
   test("a reset page without a valid link offers to send a new one", async ({ page }) => {

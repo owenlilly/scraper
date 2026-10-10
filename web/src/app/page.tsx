@@ -1,15 +1,14 @@
-import { SignOutButton } from "../components/SignOutButton";
+import { Workspace } from "../components/workspace/Workspace";
+import { WorkspaceProviders } from "../components/workspace/ApiProvider";
+import { getServices } from "../lib/services";
 import { requireSession } from "../lib/session";
 
-// A stand-in until the workspace is built in a later task.
 export default async function Home() {
   const session = await requireSession();
+  const user = session.user as { name: string; email: string; role?: string | null };
   return (
-    <main className="placeholder">
-      <h1>Signed in as {session.user.email}</h1>
-      <div>
-        <SignOutButton />
-      </div>
-    </main>
+    <WorkspaceProviders apiUrl={getServices().env.apiUrl}>
+      <Workspace person={{ name: user.name, email: user.email, isAdmin: user.role === "admin" }} />
+    </WorkspaceProviders>
   );
 }
