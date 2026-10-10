@@ -1,7 +1,7 @@
 [project]
 name = "scraper"
 version = "0.1.0"
-description = "Scrape a page with Scrapling and chat about it with a local Qwen model"
+description = "Page Chat: tell a model what to collect from a website, and get a table back"
 requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.15.0",
@@ -14,7 +14,6 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.1,<4",
     "lxml>=6.1.3",
     "markdownify>=1.2.3",
-    "nicegui>=3.18.0",
     "openai>=3.27.0",
     "psycopg[binary,pool]>=3.2,<4",
     "pyjwt[crypto]>=2.10,<3",
@@ -42,4 +41,3 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 filterwarnings = ["ignore:Pydantic serializer warnings:UserWarning"]
-main_file = ""
