@@ -4,7 +4,7 @@ import uuid
 from dataclasses import asdict
 from datetime import date
 
-from psycopg.types.json import Jsonb
+from psycopg.types.json import Json, Jsonb
 from psycopg_pool import ConnectionPool
 
 from scraper.config import Config
@@ -111,7 +111,7 @@ class PgSessionStore:
                     "Download them, then start a new session."
                 )
             with conn.cursor() as cur:
-                cur.executemany("INSERT INTO app.rows (user_id, data) VALUES (%s, %s)", [(self.user_id, Jsonb(row)) for row in rows])
+                cur.executemany("INSERT INTO app.rows (user_id, data) VALUES (%s, %s)", [(self.user_id, Json(row)) for row in rows])
 
     def append_history(self, messages: list[Message]) -> None:
         if self.closed:

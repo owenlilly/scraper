@@ -245,3 +245,10 @@ def test_a_closed_store_does_not_create_a_session_row(pg):
     store.wipe()
     with pg.connection() as conn:
         assert conn.execute("SELECT count(*) FROM app.sessions WHERE user_id = 'alice'").fetchone()[0] == 0
+
+
+def test_rows_keep_the_order_of_their_columns_after_a_reload(pg):
+    # Postgres jsonb sorts keys (shortest first), which would scramble the table's columns once a session is loaded again.
+    PgSessionStore(pg, "alice", CFG).append_rows([{"price": "$9", "plan": "Solo", "page": "shop.example/plans"}])
+    reloaded = PgSessionStore(pg, "alice", CFG).load()
+    assert list(reloaded.rows[0]) == ["price", "plan", "page"]

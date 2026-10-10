@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS app.pages (
     markdown text NOT NULL, links jsonb NOT NULL, html text NOT NULL, looks_empty boolean NOT NULL,
     PRIMARY KEY (user_id, key));
 CREATE INDEX IF NOT EXISTS pages_user_position ON app.pages (user_id, position);
-CREATE TABLE IF NOT EXISTS app.rows (id bigserial PRIMARY KEY, user_id text NOT NULL, data jsonb NOT NULL);
+-- json, not jsonb: jsonb sorts an object's keys, and the results table's columns must stay in the order the agent chose
+CREATE TABLE IF NOT EXISTS app.rows (id bigserial PRIMARY KEY, user_id text NOT NULL, data json NOT NULL);
 CREATE INDEX IF NOT EXISTS rows_user ON app.rows (user_id, id);
 CREATE TABLE IF NOT EXISTS app.history (
     id bigserial PRIMARY KEY, user_id text NOT NULL, role text NOT NULL, content text NOT NULL, reasoning text NOT NULL,
@@ -26,6 +27,13 @@ CREATE TABLE IF NOT EXISTS app.prefs (
 CREATE TABLE IF NOT EXISTS app.usage (
     user_id text NOT NULL, day date NOT NULL, model_calls integer NOT NULL DEFAULT 0, pages integer NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day));
+"""
+ROWS_AS_JSON = """
+DO $$ BEGIN
+    IF (SELECT data_type FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'rows' AND column_name = 'data') = 'jsonb' THEN
+        ALTER TABLE app.rows ALTER COLUMN data TYPE json;
+    END IF;
+END $$;
 """
 USER_TABLES = ("sessions", "pages", "rows", "history", "runs", "prefs", "usage")
 
@@ -44,6 +52,7 @@ def migrate(pool: ConnectionPool) -> None:
         if conn.execute("SELECT 1 FROM pg_namespace WHERE nspname = 'app'").fetchone() is None:
             conn.execute("CREATE SCHEMA app")
         conn.execute(TABLES)
+        conn.execute(ROWS_AS_JSON)  # a database made before rows were json keeps its rows, with their key order as jsonb left it
 
 
 async def open_checkpointer(url: str, stack: AsyncExitStack) -> AsyncPostgresSaver:

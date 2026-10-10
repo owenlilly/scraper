@@ -40,3 +40,12 @@ def test_migrate_creates_the_schema_only_when_it_is_missing():
 def test_migrate_can_run_again_against_a_real_database(pg_pool):
     migrate(pg_pool)
     migrate(pg_pool)
+
+
+def test_migrate_turns_an_older_jsonb_rows_table_into_one_that_keeps_column_order(pg_pool):
+    with pg_pool.connection() as conn:
+        conn.execute("ALTER TABLE app.rows ALTER COLUMN data TYPE jsonb")
+    migrate(pg_pool)
+    with pg_pool.connection() as conn:
+        kind = conn.execute("SELECT data_type FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'rows' AND column_name = 'data'").fetchone()[0]
+    assert kind == "json"
