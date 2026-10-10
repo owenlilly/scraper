@@ -5099,6 +5099,8 @@ A fresh reviewer read the whole branch and the findings below were fixed, each t
 - **Retained page size**: `make_hosted_fetch` cuts a page to `max_page_chars` before the session keeps it (the model is told when text was cut). Tests in `tests/test_hosted.py`. The download itself is not size-limited; give the container a memory limit (see `docs/hosted-deploy.md`).
 - **Account deletion** closes the user's store so a run that is still stopping cannot write anything back, waits up to 5 seconds for that run to stop (otherwise `409`, so the web app retries), then deletes twice with a short pause between. Tests in `tests/test_pgstore.py` and `tests/test_api_state.py`.
 
+- **Tests never read a real key.** Configuration is also read from a `.env` in the working directory, which can hold a real model key. The entry point tests now run in a scratch directory (`tmp_path`), so they cannot pick one up. (Nothing in the suite makes a real model request in any case; every test uses fakes or made-up addresses.)
+
 Known and deferred: the minor findings and the follow-up delivery race (Review Focus 1) are listed in the hand-over message and the execution ledger.
 
 ## Self-review notes
