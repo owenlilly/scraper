@@ -1,15 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../../lib/api/client";
-import { deriveThread } from "../../lib/workspace/derive";
+import { useRun } from "../../lib/workspace/run";
 import { useWorkspaceState, useRefreshState } from "../../lib/workspace/state";
 import type { Person } from "./AccountMenu";
 import { useApi } from "./ApiProvider";
 import { Dialog } from "../Dialog";
 import { ResultsPane } from "./ResultsPane";
-import { EmptyThread, Thread } from "./Thread";
+import { Conversation } from "./Conversation";
 import { TopBar } from "./TopBar";
 import "./workspace.css";
 
@@ -21,6 +21,8 @@ export function Workspace({ person }: { person: Person }) {
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [confirmNew, setConfirmNew] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<string[]>([]);
+  const run = useRun({ onNotice: setToast, onDrafts: useCallback((texts: string[]) => setDrafts(texts), []) });
 
   useEffect(() => {
     if (state.error instanceof ApiError && state.error.status === 401) router.replace("/sign-in");
@@ -32,7 +34,6 @@ export function Workspace({ person }: { person: Person }) {
   }, [toast]);
 
   const data = state.data;
-  const thread = useMemo(() => (data ? deriveThread(data, null) : []), [data]);
 
   if (!data) {
     return (
@@ -73,6 +74,7 @@ export function Workspace({ person }: { person: Person }) {
     setConfirmNew(false);
     try {
       await api.post("/session/new");
+      run.clear();
       await refresh();
       setTab("chat");
     } catch (error) {
@@ -83,7 +85,7 @@ export function Workspace({ person }: { person: Person }) {
   const rowCount = data.rows.length;
   return (
     <div className="page workspace">
-      <TopBar person={person} usage={data.usage} canReset={!data.busy} onNewSession={() => setConfirmNew(true)} />
+      <TopBar person={person} usage={data.usage} canReset={!data.busy && run.live?.status !== "streaming"} onNewSession={() => setConfirmNew(true)} />
       <div className="work" data-tab={tab}>
         <div className="tabs" role="tablist" aria-label="Workspace">
           <button type="button" role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
@@ -93,11 +95,7 @@ export function Workspace({ person }: { person: Person }) {
             Results ({rowCount})
           </button>
         </div>
-        <div className="pane chat">
-          <div className="thread" aria-live="polite">
-            {thread.length === 0 ? <EmptyThread examples={[]} /> : <Thread items={thread} />}
-          </div>
-        </div>
+        <Conversation state={data} run={run} pendingDrafts={drafts} onNotice={setToast} />
         <ResultsPane state={data} onDownload={download} />
       </div>
       <Dialog
