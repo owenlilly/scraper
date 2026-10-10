@@ -1669,7 +1669,26 @@ When the browser goes away mid-stream, Python cancels the generator at its next 
 - Consumes: `Session` as built so far.
 - Produces: `Session.release_after_disconnect()`: if the run is `running`, mark it `stopped`, hand back unread follow-ups as drafts, and save. Does nothing for a paused, finished or absent run.
 
-- [ ] **Step 1: Add to the end of `tests/test_session.py`**
+- [ ] **Step 1: Import `asyncio` in the session tests**
+
+The new tests pause for a moment after closing a stream, so LangChain's error callback can finish before the test's event loop closes (otherwise pytest prints `Task was destroyed but it is pending`).
+
+In `tests/test_session.py`, replace:
+
+```python
+from contextlib import AsyncExitStack
+from dataclasses import replace
+```
+
+with:
+
+```python
+import asyncio
+from contextlib import AsyncExitStack
+from dataclasses import replace
+```
+
+- [ ] **Step 2: Add to the end of `tests/test_session.py`**
 
 ```python
 # ---- the browser goes away mid-run ---------------------------------------------
@@ -1682,6 +1701,7 @@ async def test_a_dropped_connection_leaves_the_run_stopped_and_resumable():
     first = await anext(stream)  # the browser read one event, then went away
     assert first.kind in ("step", "reasoning", "answer", "tool_start")
     await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
     assert session.busy is False  # nothing else is blocked behind the dead stream
     assert session.run.status == "running"  # nobody has said otherwise yet
     session.release_after_disconnect()
@@ -1697,6 +1717,7 @@ async def test_messages_the_agent_never_read_are_handed_back_when_the_connection
     await anext(stream)
     assert session.steer("also the footer").status == "queued"
     await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
     session.release_after_disconnect()
     assert session.take_stopped_drafts() == ["also the footer"]
 
@@ -1712,7 +1733,7 @@ async def test_releasing_after_a_disconnect_leaves_finished_and_paused_runs_alon
     Session(CFG, FakeLLM(), make_fetch({})).release_after_disconnect()  # no run at all: nothing to do
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [ ] **Step 3: Run the tests to see them fail**
 
 ```bash
 uv run pytest tests/test_session.py -q -k 'dropped or releasing or handed_back'
@@ -1720,7 +1741,7 @@ uv run pytest tests/test_session.py -q -k 'dropped or releasing or handed_back'
 
 Expected: FAIL (`AttributeError`)
 
-- [ ] **Step 3: Edit `src/scraper/session.py`**
+- [ ] **Step 4: Edit `src/scraper/session.py`**
 
 In `src/scraper/session.py`, replace:
 
@@ -1744,7 +1765,7 @@ with:
         self._save_run()
 ```
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [ ] **Step 5: Run the tests to see them pass**
 
 ```bash
 uv run pytest tests/test_session.py -q
@@ -1752,7 +1773,7 @@ uv run pytest tests/test_session.py -q
 
 Expected: PASS (output contains `passed`)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/scraper/session.py tests/test_session.py
