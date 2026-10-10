@@ -82,6 +82,22 @@ class ContextTrim(AgentMiddleware):
         return self.before_model(state, runtime)
 
 
+class UsageGuard(AgentMiddleware):
+    """Hosted mode: every model call spends the user's daily allowance. A spent allowance raises, which ends the round
+    with an error event and leaves the thread resumable."""
+
+    def __init__(self, charge: Callable[[], None]) -> None:
+        self.charge = charge
+
+    def before_model(self, state, runtime):
+        self.charge()
+        return None
+
+    async def abefore_model(self, state, runtime):
+        self.charge()
+        return None
+
+
 class RunGuard(AgentMiddleware):
     state_schema = GuardState
 

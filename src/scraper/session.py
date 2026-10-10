@@ -22,6 +22,7 @@ from .llm import Event
 from .models import Message, TraceEntry
 from .store import RunRecord, SessionStore
 from .tools import ToolBox, build_tools, host_of, hosts_in
+from .usage import UsageLimitReached, UsageMeter
 
 SYSTEM_PROMPT = (
     "You answer questions about web pages the user has scraped. "
@@ -88,8 +89,10 @@ class Session:
         checkpointer=None,
         model_factory=None,
         providers: dict | None = None,
+        usage: UsageMeter | None = None,
     ) -> None:
         self.cfg = cfg
+        self.usage = usage
         self.providers: dict = dict(providers) if providers else {llm.key: llm}
         self.provider: str = llm.key
         self._fetch = fetch_fn
@@ -366,6 +369,12 @@ class Session:
             *history,
             {"role": "user", "content": question},
         ]
+        if self.usage is not None:
+            try:
+                self.usage.charge_model_call()
+            except UsageLimitReached as exc:
+                yield Event("error", str(exc))
+                return
         answer, reasoning, failed = "", "", False
         async with aclosing(self.llm.stream_chat(model, messages)) as stream:
             async for event in stream:
@@ -423,6 +432,7 @@ class Session:
                 1000, int(window * self.cfg.context_fraction) - ctx.estimate_tokens(run.system_prompt) - self.cfg.reply_reserve
             ),
             on_grant=lambda reason, toolbox=self._toolbox, run=run: self._grant_pages(toolbox, run),
+            usage_charge=self.usage.charge_model_call if self.usage is not None else None,
             followups=lambda: list(self.run.followups) if self.run is not None else [],
             on_inject=lambda followup, toolbox=self._toolbox: toolbox.allowed_hosts.update(h for h in hosts_in(followup["text"]) if h),
             on_present=self._adopt_followup,
