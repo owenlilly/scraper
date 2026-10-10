@@ -24,12 +24,20 @@ class PgSessionStore:
         self.pool = pool
         self.user_id = user_id
         self.cfg = cfg
+        self.closed = False
+
+    def close(self) -> None:
+        """The user is being deleted. A run that is still stopping may try to save once more; those writes are dropped,
+        so nothing can bring the deleted data back. Reads still work."""
+        self.closed = True
 
     # ---- session ids and run numbers ------------------------------------------
 
     def session_id(self) -> str:
         """Unique per user and session, and it starts with the user id, so checkpoint thread ids can never collide."""
         fresh = f"{self.user_id}:{uuid.uuid4().hex[:12]}"
+        if self.closed:
+            return fresh  # nothing is written for a user who is being deleted
         with self.pool.connection() as conn:
             conn.execute("INSERT INTO app.sessions (user_id, session_id) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (self.user_id, fresh))
             return conn.execute("SELECT session_id FROM app.sessions WHERE user_id = %s", (self.user_id,)).fetchone()[0]
@@ -40,6 +48,8 @@ class PgSessionStore:
             return row[0] if row else 0
 
     def next_run_number(self) -> int:
+        if self.closed:
+            return 0
         self.session_id()  # make sure the row exists
         with self.pool.connection() as conn:
             return conn.execute(
@@ -54,6 +64,8 @@ class PgSessionStore:
             return row[0] if row else None
 
     def set_pref(self, key: str, value: str) -> None:
+        if self.closed:
+            return
         with self.pool.connection() as conn:
             conn.execute(
                 "INSERT INTO app.prefs (user_id, key, value) VALUES (%s, %s, %s) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
@@ -63,6 +75,8 @@ class PgSessionStore:
     # ---- content ----------------------------------------------------------------
 
     def save_page(self, page: Page) -> None:
+        if self.closed:
+            return
         key = normalize(page.url)
         limit = self.cfg.max_page_chars
         with self.pool.connection() as conn:
@@ -87,7 +101,7 @@ class PgSessionStore:
             )
 
     def append_rows(self, rows: list[dict]) -> None:
-        if not rows:
+        if not rows or self.closed:
             return
         with self.pool.connection() as conn:
             stored = conn.execute("SELECT count(*) FROM app.rows WHERE user_id = %s", (self.user_id,)).fetchone()[0]
@@ -100,6 +114,8 @@ class PgSessionStore:
                 cur.executemany("INSERT INTO app.rows (user_id, data) VALUES (%s, %s)", [(self.user_id, Jsonb(row)) for row in rows])
 
     def append_history(self, messages: list[Message]) -> None:
+        if self.closed:
+            return
         records = [
             (
                 self.user_id, m.role, m.content, m.reasoning, Jsonb(list(m.sources)), m.interrupted, m.note,
@@ -114,6 +130,8 @@ class PgSessionStore:
             )
 
     def save_run(self, record: RunRecord) -> None:
+        if self.closed:
+            return
         with self.pool.connection() as conn:
             conn.execute(
                 "INSERT INTO app.runs (user_id, data) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data",
@@ -148,6 +166,8 @@ class PgSessionStore:
 
     def wipe(self) -> None:
         """New session: forget the session, pages, results, history and run. Preferences and usage stay."""
+        if self.closed:
+            return
         with self.pool.connection() as conn:
             for table in ("pages", "rows", "history", "runs", "sessions"):
                 conn.execute(f"DELETE FROM app.{table} WHERE user_id = %s", (self.user_id,))  # noqa: S608 (fixed table names)

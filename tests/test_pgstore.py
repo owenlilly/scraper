@@ -217,3 +217,31 @@ def test_the_meter_works_on_top_of_the_postgres_counters(pg):
     with pytest.raises(UsageLimitReached):
         meter.charge_page()
     assert meter.snapshot()["pages"] == 1
+
+
+# ---- a closed store (the user is being deleted) ignores late writes ------------------------------------------------------------
+
+
+def test_a_closed_store_ignores_every_write_but_still_reads(pg):
+    store = PgSessionStore(pg, "alice", CFG)
+    store.save_page(make_page("https://a.test/", title="before"))
+    store.set_pref("provider", "mistral")
+    store.close()
+    store.save_page(make_page("https://a.test/late"))
+    store.append_rows([{"late": 1}])
+    store.append_history([Message("user", "late")])
+    store.save_run(RunRecord(number=1, instruction="late"))
+    store.set_pref("late", "1")
+    assert store.next_run_number() == 0
+    assert [p.title for p in store.load().pages] == ["before"]  # reads still work
+    assert (store.load().rows, store.load().history, store.load().run) == ([], [], None)
+    assert store.get_pref("late") is None and store.get_pref("provider") == "mistral"
+
+
+def test_a_closed_store_does_not_create_a_session_row(pg):
+    store = PgSessionStore(pg, "alice", CFG)
+    store.close()
+    store.session_id()
+    store.wipe()
+    with pg.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM app.sessions WHERE user_id = 'alice'").fetchone()[0] == 0

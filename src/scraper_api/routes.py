@@ -1,6 +1,8 @@
 """Routes that read or change a user's saved state. All but /health and /account-data act on the signed-in user's own session."""
 
+import asyncio
 import hmac
+import time
 
 from fastapi import APIRouter, Depends, Header, Response
 
@@ -13,6 +15,8 @@ from .registry import Entry
 from .schemas import SETTING_NAMES, DeleteAccountBody, ModelBody, SettingBody, build_state, model_dict
 
 router = APIRouter()
+DELETE_WAIT_SECONDS = 5.0  # how long a deletion waits for the person's live run to stop
+DELETE_SETTLE_SECONDS = 0.25  # trailing writes from a stopped run (checkpoints are saved in the background)
 
 
 # ---- open ------------------------------------------------------------------------------
@@ -32,9 +36,18 @@ async def account_data(
         raise ApiError(401, "unauthorized", "Not allowed.")
     entry = deps.registry.peek(body.user_id)
     if entry is not None:
+        entry.session.store.close()  # from now on a run that is still stopping cannot write anything back
         entry.session.cancel()
+        deadline = time.monotonic() + DELETE_WAIT_SECONDS
+        while entry.session.busy and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if entry.session.busy:
+            raise ApiError(409, "busy", "A run is still stopping. Try again in a few seconds.")
     deps.registry.forget(body.user_id)
     delete_user_data(deps.pool, body.user_id)
+    if entry is not None:
+        await asyncio.sleep(DELETE_SETTLE_SECONDS)
+        delete_user_data(deps.pool, body.user_id)  # and again, for what the stopped run saved in its last moments
     return Response(status_code=204)
 
 

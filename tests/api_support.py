@@ -36,11 +36,17 @@ class Harness:
         self.pool = pg
         self.url_check = url_check or (lambda url: None)
         self.web = dict(WEB)
+        self.before_fetch = None  # a test may set this to run (or block) inside the fake fetch
+
+    def _fetch(self, url, mode="fast", *, timeout=20.0):
+        if self.before_fetch is not None:
+            self.before_fetch(url)
+        return make_fetch(self.web)(url, mode, timeout=timeout)
 
     def build(self):
         registry = SessionRegistry(
             self.cfg, pool=self.pool, checkpointer=InMemorySaver(), llm=self.llm, usage_store=MemoryUsageStore(),
-            fetch_base=lambda url, mode="fast", *, timeout=20.0: make_fetch(self.web)(url, mode, timeout=timeout),
+            fetch_base=self._fetch,
             url_check=self.url_check, model_factory=lambda model_id: self.model,
         )
         self.deps = Deps(

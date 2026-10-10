@@ -163,3 +163,51 @@ async def test_account_data_is_deleted_for_that_user_only_and_needs_the_service_
 async def test_a_user_token_cannot_delete_account_data(api):
     response = await api.client.request("DELETE", "/account-data", json={"user_id": "bob"}, headers=api.auth("alice"))
     assert response.status_code == 401
+
+
+# ---- deleting an account while a run is live -----------------------------------------------------------------------------------
+
+
+async def test_deleting_an_account_in_the_middle_of_a_run_leaves_nothing_behind(api):
+    import asyncio
+    import threading
+
+    from fakes import ai, call
+    from scraper_api.db import USER_TABLES
+    from scraper_api.streams import stream_response
+
+    started, release = threading.Event(), threading.Event()
+    api.before_fetch = lambda url: (started.set(), release.wait(10))
+    api.model.script = [ai("", call("fetch_page", "c1", url=A)), ai("", call("add_rows", "c2", rows=[{"late": 1}])), ai("All done.")]
+    entry = await api.deps.registry.get("alice")
+
+    async def drain():
+        return [c async for c in stream_response(api.deps, entry, lambda: entry.session.run_agent(f"read {A}", MODEL)).body_iterator]
+
+    reader = asyncio.create_task(drain())
+    assert await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)  # the run is now inside the fetch tool
+    assert entry.session.busy
+    deletion = asyncio.create_task(api.client.request("DELETE", "/account-data", json={"user_id": "alice"}, headers={"X-Service-Secret": "s3cret"}))
+    await asyncio.sleep(0.2)
+    assert not deletion.done()  # it waits for the run to stop rather than racing it
+    release.set()
+    response = await deletion
+    await reader
+    assert response.status_code == 204
+    with api.pool.connection() as conn:
+        for table in USER_TABLES:
+            assert conn.execute(f"SELECT count(*) FROM app.{table} WHERE user_id = 'alice'").fetchone()[0] == 0, table
+    assert api.deps.registry.peek("alice") is None
+
+
+async def test_deletion_says_to_try_again_when_a_run_will_not_stop(api, monkeypatch):
+    import scraper_api.routes as routes
+
+    monkeypatch.setattr(routes, "DELETE_WAIT_SECONDS", 0.2)
+    await seed_page(api)
+    entry = await api.deps.registry.get("alice")
+    entry.session.busy = True  # a run that never stops
+    response = await api.client.request("DELETE", "/account-data", json={"user_id": "alice"}, headers={"X-Service-Secret": "s3cret"})
+    assert response.status_code == 409 and response.json()["error"]["code"] == "busy"
+    with api.pool.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM app.pages WHERE user_id = 'alice'").fetchone()[0] == 1  # nothing was deleted yet
