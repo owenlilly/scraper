@@ -84,6 +84,8 @@ The API reads environment variables (`SCRAPER_<NAME>`), or a `.env` file in the 
 
 ## Tests
 
+`make help` lists the common tasks (`make test`, `make e2e-ui`, `make api`, `make web`, and so on). `make test-db` starts a throwaway Postgres in Podman with the scratch databases the tests use.
+
 ```bash
 uv run pytest
 ```
