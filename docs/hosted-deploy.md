@@ -34,6 +34,7 @@ Set these in the API's environment (or a `.env` file next to where it runs). Rea
 | `SCRAPER_HOSTED` | `true`. The API refuses to start without it |
 | `SCRAPER_DATABASE_URL` | `postgresql://scraper_api:...@host/scraper` |
 | `SCRAPER_API_KEY` | Your Mistral key. It exists only on this host, never in Vercel |
+| `SCRAPER_PROVIDER` | Optional. `mistral` (the default when hosted) or `lmstudio`, to use a model server you run yourself, such as LM Studio or any server with the same API. A local model needs no `SCRAPER_API_KEY`; set `SCRAPER_BASE_URL` to its address (default `http://localhost:1234/v1`). Page text then goes only to that server |
 | `SCRAPER_JWKS_URL` | `https://<web app>/api/auth/jwks` |
 | `SCRAPER_JWT_ISSUER` | The web app's base URL, exactly as Better Auth issues it |
 | `SCRAPER_JWT_AUDIENCE` | The audience the web app puts in its tokens |
@@ -86,6 +87,8 @@ podman run --env-file .env -p 8080:8080 page-chat-api
 ```
 
 For a local stack with Postgres, copy `.env.example` to `.env`, set `POSTGRES_PASSWORD` and the hosted settings, and run `podman-compose up --build`. The local compose file uses one database user for both schemas; production should use the two roles above.
+
+To develop or test on a local model (no Mistral account, no cost), start LM Studio with a model loaded, then run the API with `SCRAPER_PROVIDER=lmstudio SCRAPER_BASE_URL=http://127.0.0.1:1234/v1` and, if you want to limit the choice, `SCRAPER_ALLOWED_MODELS` set to the model ids to offer. Choose a model that supports tool calling, such as a Ministral 3 8B build. The web app shows the "pages are sent to" notice only for a hosted provider, so with a local model it stays out of the way.
 
 Health check: `GET /health` returns `{"ok": true}` with no sign-in.
 

@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from scraper.config import Config
-from scraper.llm import MistralAPI
+from scraper.llm import LMStudio, MistralAPI
 from scraper.usage import UsageStore
 
 from .auth import JWKSVerifier
@@ -27,12 +27,19 @@ log = logging.getLogger("scraper_api")
 EVICT_EVERY_SECONDS = 60
 
 
+def make_llm(cfg: Config):
+    """The model server this deployment uses: Mistral's API by default, or an LM Studio compatible server you run yourself."""
+    if cfg.provider == "lmstudio":
+        return LMStudio(cfg.base_url, fallback_context=cfg.fallback_context)
+    return MistralAPI(cfg.mistral_base_url, cfg.api_key, fallback_context=cfg.fallback_context)
+
+
 async def build_deps(cfg: Config, stack: AsyncExitStack) -> Deps:
     pool = make_pool(cfg.database_url)
     stack.callback(pool.close)
     migrate(pool)
     checkpointer = await open_checkpointer(cfg.database_url, stack)
-    llm = MistralAPI(cfg.mistral_base_url, cfg.api_key, fallback_context=cfg.fallback_context)
+    llm = make_llm(cfg)
     usage: UsageStore = PgUsageStore(pool)
     return Deps(
         cfg=cfg,

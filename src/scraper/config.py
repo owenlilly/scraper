@@ -62,9 +62,9 @@ class Config:
 
     @property
     def available_providers(self) -> tuple[str, ...]:
-        """LM Studio is always offered locally; Mistral once a key is set. Hosted offers only Mistral."""
+        """LM Studio is always offered locally; Mistral once a key is set. Hosted offers only the one it is set to use."""
         if self.hosted:
-            return ("mistral",)
+            return (self.provider,)
         return ("lmstudio", "mistral") if self.api_key else ("lmstudio",)
 
     @property
@@ -115,8 +115,8 @@ def load(env: Mapping[str, str] | None = None) -> Config:
         if raw is None:
             continue
         overrides[f.name] = _parse(type(getattr(defaults, f.name)), raw, key)
-    if overrides.get("hosted"):
-        overrides["provider"] = "mistral"  # LM Studio runs on one person's machine, not on the server
+    if overrides.get("hosted") and "provider" not in overrides:
+        overrides["provider"] = "mistral"  # the default for a hosted service; SCRAPER_PROVIDER=lmstudio uses a model server you run
     provider = overrides.get("provider", defaults.provider)
     if provider not in PROVIDERS:
         raise ValueError(f"{ENV_PREFIX}PROVIDER must be one of {', '.join(PROVIDERS)}, got {provider!r}")
@@ -127,6 +127,8 @@ def load(env: Mapping[str, str] | None = None) -> Config:
             raise ValueError(f"{ENV_PREFIX}PROVIDER=mistral needs {ENV_PREFIX}API_KEY (or MISTRAL_API_KEY)")
     if overrides.get("hosted"):
         for name, variable in HOSTED_REQUIRED.items():
+            if name == "api_key" and provider != "mistral":  # a model server you run needs no key
+                continue
             if not overrides.get(name):
                 raise ValueError(f"{ENV_PREFIX}HOSTED needs {variable}")
     cfg = Config(**overrides)
