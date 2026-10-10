@@ -89,7 +89,7 @@ The provider status in the footer re-checks every 15 seconds.
 
 ## Hosted API
 
-`python -m scraper_api` serves the same agent to many signed-in people from one Postgres-backed process, for the Next.js web app. Setup, settings, the required network rules and a database role layout are in [docs/hosted-deploy.md](docs/hosted-deploy.md). The local app above is unchanged.
+`python -m scraper_api` serves the same agent to many signed-in people from one Postgres-backed process, for the Next.js web app. The web app (accounts, invitations and sign-in) is in [web/](web/README.md). Setup, settings, the required network rules and a database role layout are in [docs/hosted-deploy.md](docs/hosted-deploy.md). The local app above is unchanged.
 
 ## Tests
 

@@ -98,3 +98,33 @@ Health check: `GET /health` returns `{"ok": true}` with no sign-in.
 - **Rotating the Mistral key.** Change `SCRAPER_API_KEY` and restart.
 - **Deleting a person.** The web app calls `DELETE /account-data` with `X-Service-Secret`. That removes their session, pages, results, history, runs, preferences, usage counts and agent checkpoints.
 - **Costs.** The per-person daily limits count model calls and pages, not tokens. A call's size is bounded by the model's context window, but set `SCRAPER_ALLOWED_MODELS` to cheap models to keep the worst case small.
+
+## 6. The web app
+
+The web app (`web/`, Next.js) is deployed separately, usually on Vercel with the project's root directory set to `web`. It uses the same database, in the `auth` schema, through the `scraper_web` role from section 1.
+
+Create its tables once, and again after upgrading Better Auth (it is safe to repeat):
+
+```bash
+cd web && DATABASE_URL=... BETTER_AUTH_SECRET=... BETTER_AUTH_URL=... API_URL=... SERVICE_SECRET=... EMAIL_TRANSPORT=resend RESEND_API_KEY=... EMAIL_FROM=... npm run migrate
+```
+
+Email goes through Resend: verify the sending domain there, create an API key, and set `RESEND_API_KEY` and `EMAIL_FROM` (such as `Page Chat <no-reply@your-domain>`). The app refuses to start in production with the `log` email transport, because that prints invitation links to the server log.
+
+Settings that must agree between the web app and the API (the most common mistake is a trailing slash or a different scheme):
+
+| Web app | Python API | Notes |
+|---|---|---|
+| `BETTER_AUTH_URL` | `SCRAPER_JWT_ISSUER` | Exactly equal, no trailing slash. Also the base of `SCRAPER_JWKS_URL`, which is `<BETTER_AUTH_URL>/api/auth/jwks` |
+| `API_AUDIENCE` (default `API_URL`) | `SCRAPER_JWT_AUDIENCE` | Exactly equal |
+| `SERVICE_SECRET` | `SCRAPER_SERVICE_SECRET` | The same long random string |
+| `API_URL` | the API's public address | Where account deletions are sent |
+| the app's own origin | `SCRAPER_CORS_ORIGINS` | So the browser may call the API directly |
+
+The first administrator: set `ADMIN_EMAIL` and sign up with that address. It needs no invitation and becomes the administrator; after that, everyone needs an invitation (sent from the administrator's invitation routes), and `ADMIN_EMAIL` stops having any effect.
+
+### Known limitations
+
+- **A token outlives the account for up to 15 minutes.** After someone is banned or deleted, a token they already hold still passes the API's check until it expires. A ban ends their sessions at once so they cannot get a new token, and deletion erases the API's data first, but a token in hand could create an empty session row again in that window. It holds no data.
+- **Response timing can show whether an address has an account.** Password reset sends its email before answering, so a request for a real address takes longer than one for an unknown address. The responses are identical; the timing is not hidden.
+- **An invitation link is a credential.** Anyone who holds the link can set the password for that address (and the confirmation email then goes to the real owner). Treat it like a password reset link.

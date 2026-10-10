@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "migrate": "tsx scripts/migrate.ts"
+    "migrate": "tsx scripts/migrate.ts",
+    "e2e": "bash scripts/e2e.sh"
   },
   "dependencies": {
     "better-auth": "1.7.6",
