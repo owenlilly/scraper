@@ -28,11 +28,13 @@ Success looks like:
 | Hosting | Next.js on Vercel, Python API on a separate container host |
 | Rejected | Django and django-allauth (cannot run without Django), fastapi-users (maintenance mode), Supabase Auth and fastapi-users (no built-in tenants), Ory Kratos (no organizations in open source) |
 
-## Assumptions to confirm at review
+## Assumptions
 
-1. **The NiceGUI UI is removed** (`app.py`, `theme.py`, the `nicegui` dependency). Running locally means the same stack started with `podman-compose` (Postgres, API, web), optionally with LM Studio as the provider. No separate single-user mode is kept.
+Items 1 and 3 were confirmed by the user on 2026-10-10. Items 2 and 4 are still assumptions.
+
+1. **The NiceGUI UI is removed completely** (confirmed): `src/scraper/app.py`, `theme.py`, the local `__main__.py`, their tests, the `nicegui` dependency and every mention in the docs. The removal is the last task of the UI plan, after the web app works, so the repository never has a stretch with no working UI. Running locally means the same stack started with `podman-compose` (Postgres, API, web), optionally with LM Studio as the provider. No separate single-user mode is kept.
 2. **UI direction.** The new UI keeps today's layout and full feature set. Whether to keep the "reading desk" look or redesign it is not decided; the visual pass happens at plan time with the frontend-design skill, using your feedback on what feels clunky.
-3. **Email provider** is Resend, behind one `sendEmail()` function so it is swappable.
+3. **Email provider** is Resend (confirmed), behind one `sendEmail()` function so it is swappable.
 4. **Organizations are out of scope.** Adding them later means an `org_id` column and a data migration.
 
 ## Architecture
