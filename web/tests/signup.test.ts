@@ -75,6 +75,13 @@ describe("invitation-only sign-up", () => {
     expect(response.status).toBe(400);
     expect(await h.userIdOf("gina@x.test")).toBeUndefined();
   });
+
+  it("takes a password of exactly 8 characters and refuses 7", async () => {
+    const first = await h.services.invites.create("hugo@x.test", null);
+    expect((await h.signUp("hugo@x.test", first.token, "abcdefg")).status).toBe(400);
+    const second = await h.services.invites.create("ida@x.test", null);
+    expect((await h.signUp("ida@x.test", second.token, "abcdefgh")).status).toBe(200);
+  });
 });
 
 describe("email verification", () => {

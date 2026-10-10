@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { authClient } from "../../lib/auth-client";
 import { describeAuthError } from "../../lib/auth-errors";
-import { passwordProblem } from "../../lib/password";
+import { MIN_PASSWORD, passwordProblem } from "../../lib/password";
 
 export function ResetPasswordForm() {
   const router = useRouter();
@@ -54,7 +54,7 @@ export function ResetPasswordForm() {
         <label htmlFor="password">
           New password
           <input id="password" name="password" type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-          <span className="hint">At least 12 characters. A few ordinary words work well.</span>
+          <span className="hint">At least {MIN_PASSWORD} characters. A few ordinary words work well.</span>
         </label>
         {error ? (
           <div className="error-box" role="alert">

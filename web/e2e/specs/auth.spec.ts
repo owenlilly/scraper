@@ -53,7 +53,7 @@ test.describe("joining by invitation", () => {
     await page.getByLabel("Your name").fill("Jo Joiner");
     await page.getByLabel("Password").fill("short");
     await page.getByRole("button", { name: "Create account" }).click();
-    await expect(alertSaying(page, "Use at least 12 characters")).toBeVisible();
+    await expect(alertSaying(page, "Use at least 8 characters")).toBeVisible();
     const since = logLength();
     await page.getByLabel("Password").fill(PASSWORD);
     await page.getByRole("button", { name: "Create account" }).click();

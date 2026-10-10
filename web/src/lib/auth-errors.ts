@@ -1,3 +1,5 @@
+import { MIN_PASSWORD } from "./password";
+
 /** What to tell a person when Better Auth or our hooks refuse something. Never shows a raw code or a server message. */
 
 export type AuthContext = "sign-in" | "sign-up" | "forgot" | "reset" | "delete";
@@ -21,7 +23,7 @@ export function describeAuthError(error: AuthFailure, context: AuthContext): str
     case "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL":
       return "That address already has an account. Sign in instead.";
     case "PASSWORD_TOO_SHORT":
-      return "Use at least 12 characters. A few ordinary words work well.";
+      return `Use at least ${MIN_PASSWORD} characters. A few ordinary words work well.`;
     case "PASSWORD_TOO_LONG":
       return "That password is too long. Use at most 128 characters.";
     case "INVALID_TOKEN":

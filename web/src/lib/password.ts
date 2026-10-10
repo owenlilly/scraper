@@ -1,4 +1,4 @@
-export const MIN_PASSWORD = 12;
+export const MIN_PASSWORD = 8;
 export const MAX_PASSWORD = 128;
 
 /** What is wrong with a new password, in words for the person, or null when it is fine. Counts characters people see. */

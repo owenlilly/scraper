@@ -8,6 +8,12 @@ describe("passwordProblem", () => {
     expect(passwordProblem("a".repeat(MAX_PASSWORD))).toBeNull();
   });
 
+  it("needs 8 characters, no more", () => {
+    expect(MIN_PASSWORD).toBe(8);
+    expect(passwordProblem("abcdefgh")).toBeNull();
+    expect(passwordProblem("abcdefg")).not.toBeNull();
+  });
+
   it("says how many characters are needed when it is too short", () => {
     expect(passwordProblem("short")).toBe(`Use at least ${MIN_PASSWORD} characters. A few ordinary words work well.`);
     expect(passwordProblem("a".repeat(MIN_PASSWORD - 1))).not.toBeNull();

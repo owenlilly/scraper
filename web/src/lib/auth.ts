@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { MIN_PASSWORD } from "./password";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { admin, jwt } from "better-auth/plugins";
@@ -54,7 +55,7 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
-      minPasswordLength: 12,
+      minPasswordLength: MIN_PASSWORD,
       resetPasswordTokenExpiresIn: 60 * 60,
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url }) => sendEmail(resetMessage({ to: user.email, url })),
