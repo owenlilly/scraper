@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { createMember, ownerCookie, signInBrowser } from "../support/journeys";
+import pg from "pg";
+import { env } from "../support/env";
+import { createMember, ownerCookie, signInBrowser, signInHttp } from "../support/journeys";
 import { PLAN_HISTORY, PLAN_PAGES, PLAN_ROWS, seedSession, userIdOf } from "../support/seed";
 
 test.describe("the workspace", () => {
@@ -133,5 +135,51 @@ test.describe("the workspace", () => {
   test("a signed-out visitor is sent to sign in", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveURL(/\/sign-in/);
+  });
+});
+
+test.describe("deleting an account", () => {
+  test("needs the password, then erases the account and what was saved for it, and says so at sign-in", async ({ page, context }) => {
+    const member = await createMember("leaving");
+    const id = await userIdOf(member.cookie);
+    await seedSession(id, { rows: PLAN_ROWS, history: PLAN_HISTORY });
+    await signInBrowser(context, member.cookie);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("button", { name: "Delete my account" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Delete your account?" });
+    await expect(dialog.getByRole("button", { name: "Delete my account" })).toBeDisabled();
+    await dialog.getByLabel("Password").fill("not the right password at all");
+    await dialog.getByRole("button", { name: "Delete my account" }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("That password is not right.");
+    await expect(page).toHaveURL(/\/$/);
+
+    await dialog.getByLabel("Password").fill(member.password);
+    await dialog.getByRole("button", { name: "Delete my account" }).click();
+    await expect(page).toHaveURL(/\/sign-in\?deleted=1/);
+    await expect(page.getByText("Your account was deleted.")).toBeVisible();
+    await expect(signInHttp(member.email)).rejects.toThrow();
+
+    const client = new pg.Client({ connectionString: env.database });
+    await client.connect();
+    const left = await client.query("SELECT (SELECT count(*) FROM app.rows WHERE user_id = $1) AS rows, (SELECT count(*) FROM app.history WHERE user_id = $1) AS history", [id]);
+    await client.end();
+    expect(Number(left.rows[0].rows) + Number(left.rows[0].history)).toBe(0);
+  });
+
+  test("keeping the account closes the dialog and forgets the typed password", async ({ page, context }) => {
+    const member = await createMember("staying");
+    await signInBrowser(context, member.cookie);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("button", { name: "Delete my account" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete your account?" });
+    await dialog.getByLabel("Password").fill("something typed");
+    await dialog.getByRole("button", { name: "Keep my account" }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("button", { name: "Delete my account" }).click();
+    await expect(dialog.getByLabel("Password")).toHaveValue("");
   });
 });

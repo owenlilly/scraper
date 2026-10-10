@@ -8,6 +8,7 @@ import { useWorkspaceState, useRefreshState } from "../../lib/workspace/state";
 import type { Person } from "./AccountMenu";
 import { useApi } from "./ApiProvider";
 import { Dialog } from "../Dialog";
+import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { ResultsPane } from "./ResultsPane";
 import { Conversation } from "./Conversation";
 import { TopBar } from "./TopBar";
@@ -20,6 +21,7 @@ export function Workspace({ person }: { person: Person }) {
   const refresh = useRefreshState();
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [confirmNew, setConfirmNew] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<string[]>([]);
   const run = useRun({ onNotice: setToast, onDrafts: useCallback((texts: string[]) => setDrafts(texts), []) });
@@ -85,7 +87,7 @@ export function Workspace({ person }: { person: Person }) {
   const rowCount = data.rows.length;
   return (
     <div className="page workspace">
-      <TopBar person={person} usage={data.usage} canReset={!data.busy && run.live?.status !== "streaming"} onNewSession={() => setConfirmNew(true)} />
+      <TopBar person={person} usage={data.usage} canReset={!data.busy && run.live?.status !== "streaming"} onNewSession={() => setConfirmNew(true)} onDelete={() => setDeleting(true)} />
       <div className="work" data-tab={tab}>
         <div className="tabs" role="tablist" aria-label="Workspace">
           <button type="button" role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
@@ -115,6 +117,7 @@ export function Workspace({ person }: { person: Person }) {
       >
         <p>This clears the pages, results and chat, and any run that is waiting. Your settings stay.</p>
       </Dialog>
+      <DeleteAccountDialog open={deleting} onClose={() => setDeleting(false)} />
       {toast ? (
         <div className="toast" role="status">
           {toast}
