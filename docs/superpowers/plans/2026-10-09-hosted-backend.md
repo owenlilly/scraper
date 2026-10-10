@@ -2590,6 +2590,8 @@ Expected: FAIL (`ModuleNotFoundError`)
 
 - [ ] **Step 4: Create `src/scraper_api/auth.py`**
 
+**Corrected after review:** the paragraph below describes the first version of this file, whose premise was wrong. PyJWT's `PyJWKClient` does refetch on an unknown key id, but only after its own 30 second cooldown, and with key caching on it remembers a key id for the life of the process, so a withdrawn key would stay trusted until restart. The committed `auth.py` keeps its own key cache instead (see "After the final review" at the end of this plan).
+
 PyJWT's `PyJWKClient` caches keys for five minutes and does **not** refetch when it meets an unknown key id (checked by running it), so a key rotation would lock everyone out. The verifier forces one refresh, at most once per 30 seconds, so forged key ids cannot make the API hammer the web app. Only the allowed algorithm list is accepted, which rules out `alg: none` and the HS256-with-the-public-key trick.
 
 ```python
@@ -5086,6 +5088,18 @@ git add src/scraper_api/__main__.py scripts tests/test_entrypoint.py tests/test_
 git commit -m "Add the hosted entry point, container files and deployment notes"
 ```
 
+
+## After the final review
+
+A fresh reviewer read the whole branch and the findings below were fixed, each test-first, in the commits that follow Task 13. The code blocks in the tasks above show the code as first written; the repository holds the corrected version.
+
+- **Oversized request bodies** were read and parsed before the token was checked, so anyone could make the single process buffer a huge body. New `src/scraper_api/limits.py` refuses bodies over 64 KB (on the declared length, or by cutting off a body that streams in without one) before anything reads them. Tests: `tests/test_api_limits.py`.
+- **Token keys**: `JWKSVerifier` now keeps its own key cache (`ttl` 300 s, stale-if-error, a remembered failure is not retried on every request, one forced refresh per 30 s for an unknown key id). A withdrawn key stops being trusted at the next refresh, and a key server outage no longer matters to keys already seen. Tests added to `tests/test_auth.py`.
+- **A question holds the session** like any other work (`Session.ask` takes the same lock), and a stream that loses the race for the session no longer marks the winner's run as stopped. Tests in `tests/test_session.py` and `tests/test_api_runs.py`.
+- **Retained page size**: `make_hosted_fetch` cuts a page to `max_page_chars` before the session keeps it (the model is told when text was cut). Tests in `tests/test_hosted.py`. The download itself is not size-limited; give the container a memory limit (see `docs/hosted-deploy.md`).
+- **Account deletion** closes the user's store so a run that is still stopping cannot write anything back, waits up to 5 seconds for that run to stop (otherwise `409`, so the web app retries), then deletes twice with a short pause between. Tests in `tests/test_pgstore.py` and `tests/test_api_state.py`.
+
+Known and deferred: the minor findings and the follow-up delivery race (Review Focus 1) are listed in the hand-over message and the execution ledger.
 
 ## Self-review notes
 

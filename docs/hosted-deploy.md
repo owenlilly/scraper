@@ -91,6 +91,8 @@ Health check: `GET /health` returns `{"ok": true}` with no sign-in.
 
 ## 5. Things to know
 
+- **Memory limit.** The API refuses request bodies over 64 KB, but it cannot limit how large a page it downloads for someone. Run the container with a memory limit (for example `podman run --memory 2g`) so one hostile page cannot take the host down.
+
 - **No access log.** The API does not log requests, so page addresses and prompts never reach a log file. It logs failures by exception type only.
 - **One process.** Restarting it ends any run that is streaming. The run is saved and the person presses Resume.
 - **Rotating the Mistral key.** Change `SCRAPER_API_KEY` and restart.
