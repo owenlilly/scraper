@@ -71,6 +71,13 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     hooks: {
       // Invite-only: an account can be created only with the single-use token that was emailed to that exact address.
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === "/delete-user") {
+          // Better Auth asks for the password only when the session is more than a day old. Erasing an account, and everything the
+          // Python API holds for it, is not something a stolen session cookie alone should be able to do.
+          const password = (ctx.body as { password?: unknown } | undefined)?.password;
+          if (typeof password !== "string" || !password) throw new APIError("BAD_REQUEST", { message: "Enter your password to delete your account.", code: "PASSWORD_REQUIRED" });
+          return;
+        }
         if (ctx.path === "/admin/remove-user") {
           // An administrator removing someone: Better Auth's own admin route never calls `beforeDelete`, so do the erase here, but only
           // for a real administrator removing someone else (the route refuses self-removal, and must not erase a person's data first).

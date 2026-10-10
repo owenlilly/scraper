@@ -101,6 +101,22 @@ describe("deleting an account", () => {
     expect(calls.length).toBe(asked); // and the Python API was never asked to erase the victim's data on their behalf
   });
 
+  it.each([
+    ["no password", {}],
+    ["an empty password", { password: "" }],
+    ["a password that is not text", { password: 12345 }],
+    ["a null password", { password: null }],
+  ])("needs the password even while the session is fresh, so a stolen session cookie cannot erase an account: %s", async (name, body) => {
+    const email = `fresh-${name.replace(/\W+/g, "-")}@example.com`;
+    const cookie = await h.makeUser(email);
+    const asked = calls.length;
+    const response = await h.call("/delete-user", { cookie, body });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "PASSWORD_REQUIRED" });
+    expect(await exists(email)).toBe(true);
+    expect(calls.length).toBe(asked); // nothing was erased in the Python API either
+  });
+
   it("needs the password to delete your own account", async () => {
     behaviour = async () => {};
     const cookie = await h.makeUser("careful@example.com");
