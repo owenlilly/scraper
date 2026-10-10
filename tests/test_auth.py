@@ -114,3 +114,70 @@ def test_a_key_already_cached_keeps_working_if_the_provider_goes_down(idp):
     v.user_id(signer.token())
     server.down = True
     assert v.user_id(signer.token("still-here")) == "still-here"
+
+
+# ---- the key cache outlives an outage and follows the key server ---------------------------------------------------------
+
+
+def test_cached_keys_keep_working_past_the_cache_lifetime_while_the_key_server_is_down(idp):
+    signer, server = idp
+    now = [1000.0]
+    v = verifier(server, clock=lambda: now[0])
+    v.user_id(signer.token())
+    server.down = True
+    now[0] += 3600  # an hour later: well past the 5 minute cache lifetime
+    assert v.user_id(signer.token("still-here")) == "still-here"
+
+
+def test_a_failed_refresh_is_not_retried_on_every_request(idp):
+    signer, server = idp
+    now = [1000.0]
+    v = verifier(server, clock=lambda: now[0])
+    v.user_id(signer.token())
+    server.down = True
+    now[0] += 3600
+    before = server.requests
+    for _ in range(25):
+        v.user_id(signer.token())
+    assert server.requests - before == 1  # one attempt, then the failure is remembered for a while
+    now[0] += 20
+    v.user_id(signer.token())
+    assert server.requests - before == 2
+
+
+def test_keys_are_refreshed_after_their_lifetime_and_a_withdrawn_key_stops_working(idp):
+    signer, server = idp
+    now = [1000.0]
+    v = verifier(server, clock=lambda: now[0])
+    assert v.user_id(signer.token()) == "user-1"
+    replacement = Signer("k2")
+    server.keys = [replacement.jwk]  # k1 has been withdrawn
+    assert v.user_id(signer.token("cached")) == "cached"  # still inside the cache lifetime
+    now[0] += 301
+    assert v.user_id(replacement.token("fresh")) == "fresh"
+    with pytest.raises(AuthError):
+        v.user_id(signer.token())
+
+
+def test_a_recovered_key_server_is_used_again(idp):
+    signer, server = idp
+    now = [1000.0]
+    v = verifier(server, clock=lambda: now[0])
+    v.user_id(signer.token())
+    server.down = True
+    now[0] += 400
+    v.user_id(signer.token())  # served from the old keys
+    server.down = False
+    replacement = Signer("k2")
+    server.keys = [replacement.jwk]
+    now[0] += 60
+    assert v.user_id(replacement.token("recovered")) == "recovered"
+
+
+def test_a_token_without_a_key_id_is_rejected(idp):
+    signer, server = idp
+    import jwt as pyjwt
+
+    token = pyjwt.encode({"sub": "u", "iss": ISSUER, "aud": AUDIENCE, "exp": int(time.time()) + 100}, "x" * 32, algorithm="HS256")
+    with pytest.raises(AuthError):
+        verifier(server).user_id(token)
