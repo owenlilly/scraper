@@ -870,6 +870,8 @@ async def test_a_follow_up_is_not_injected_twice_when_the_delivered_flag_is_lost
         events = await proceed_all(session)
         assert events[-1].kind == "done"
         assert [m.content for m in model.calls[0]["messages"]].count("also the SKU") == 1
+        assert session.run.followups[0]["delivered"] is True and session.take_leftovers() == []  # the lost flag is reconciled
+        assert session.history[0].content.endswith("Follow-up: also the SKU")
 
 
 async def test_stop_hands_an_unread_follow_up_back_as_a_draft():
@@ -909,3 +911,56 @@ async def test_the_system_prompt_tells_the_agent_to_expect_new_messages():
     session, model = agent_session({}, [ai("ok")])
     await run_all(session, "hi")
     assert "may send new messages while you work" in model.calls[0]["messages"][0].content
+
+
+async def test_a_follow_up_the_agent_read_survives_stop_and_resume_on_a_real_checkpointer(tmp_path):
+    web = {SITE_A: make_page(SITE_A)}
+    async with AsyncExitStack() as stack:
+        saver = await open_checkpointer(tmp_path / "checkpoints.db", stack)
+        store = SessionStore(tmp_path / "session.db")
+        script = [ai("", call("fetch_page", "c1", url=SITE_A)), ai("finished")]
+        session, model = steering_session(web, script, once(lambda s: s.steer("also the SKU")), store=store, saver=saver)
+        async for event in session.run_agent(f"read {SITE_A}", "qwen-test"):
+            if event.kind == "followup":
+                session.cancel()  # the user presses Stop as the agent starts on their message
+        assert session.run.status == "stopped"
+        events = await proceed_all(session)
+        assert events[-1].kind == "done"
+        assert [m.content for m in model.calls[-1]["messages"]].count("also the SKU") == 1
+        assert session.run.followups[0]["delivered"] is True and session.take_leftovers() == []
+        assert session.history[0].content.endswith("Follow-up: also the SKU")
+
+
+async def test_stopping_at_a_limit_card_hands_queued_follow_ups_back_instead_of_starting_a_run():
+    web = {SITE_A: make_page(SITE_A)}
+    cfg = Config(request_delay=0.0, agent_max_steps=1)
+    session, _ = agent_session(web, [ai("", call("fetch_page", "c1", url=SITE_A))], cfg=cfg)
+    await run_all(session, f"Look at {SITE_A}")
+    assert session.pending["kind"] == "limit"
+    session.steer("also the SKU")
+    await resume_all(session, {"action": "stop"})
+    assert session.run.status == "ended"
+    assert session.take_leftovers() == [] and session.take_stopped_drafts() == ["also the SKU"]
+
+
+async def test_a_new_instruction_hands_back_follow_ups_queued_on_the_run_it_replaces():
+    session = await paused_session()
+    session.steer("remember the footer")
+    session.run.status = "error"  # a resumable run the user chose not to resume
+    await run_all(session, "something else entirely")
+    assert session.take_stopped_drafts() == ["remember the footer"] and session.run.followups == []
+
+
+async def test_a_message_sent_after_stop_while_a_fetch_finishes_is_handed_back():
+    web = {SITE_A: make_page(SITE_A)}
+
+    def stop_then_type(session):
+        session.cancel()
+        session.steer("late thought")
+
+    script = [ai("", call("fetch_page", "c1", url=SITE_A)), ai("unused")]
+    session, _ = steering_session(web, script, once(stop_then_type))
+    events = await run_all(session, f"Look at {SITE_A}")
+    assert events[-1].text == "stopped"
+    assert session.take_stopped_drafts() == ["late thought"] and session.run.followups == []
+    await proceed_all(session)  # let the graph finish so nothing is left pending

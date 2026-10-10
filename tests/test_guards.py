@@ -177,7 +177,7 @@ def probe_then_queue(url: str) -> tuple[str, dict]:
     return f"probed {url}", {"ok": True, "fetched": [url], "rows_added": 0, "limit": None}
 
 
-def build_with_inbox(script, pending, *, tools=(probe,), injected=None):
+def build_with_inbox(script, pending, *, tools=(probe,), injected=None, present=None):
     model = ScriptedChat(script=list(script))
     agent = create_agent(
         model,
@@ -187,7 +187,11 @@ def build_with_inbox(script, pending, *, tools=(probe,), injected=None):
         middleware=[
             ContextTrim(100_000),
             RunGuard(max_steps=25),
-            FollowupInbox(pending, on_inject=injected.append if injected is not None else None),
+            FollowupInbox(
+                pending,
+                on_inject=injected.append if injected is not None else None,
+                on_present=present.append if present is not None else None,
+            ),
         ],
     )
     return agent, model
@@ -235,3 +239,12 @@ async def test_a_reply_with_unparseable_tool_calls_is_corrected_not_mistaken_for
     assert state.values["messages"][-1].content == "fixed" and len(model.calls) == 3
     second = humans(model.calls[1])
     assert any("not valid JSON" in text for text in second) and second[-1] == "ignore me"
+
+
+async def test_a_follow_up_already_in_the_conversation_is_reported_as_present_when_its_flag_is_unset():
+    queue.clear()
+    present = []
+    script = [ai("", call("probe_then_queue", "c1", url="a")), ai("done")]
+    agent, _ = build_with_inbox(script, lambda: list(queue), tools=(probe_then_queue,), present=present)
+    await drive(agent, first())
+    assert {f["id"] for f in present} == {"f1"}  # the state has it, the flag says otherwise: the owner reconciles the flag

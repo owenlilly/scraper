@@ -54,10 +54,10 @@ async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSav
         return saver
 
 
-def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None):
+def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None, on_present=None):
     middleware = [ContextTrim(max_context_tokens), RunGuard(max_steps=max_steps, on_grant=on_grant)]
     if followups is not None:
-        middleware.append(FollowupInbox(followups, on_inject))  # last: a run paused inside RunGuard must still pass through it on resume
+        middleware.append(FollowupInbox(followups, on_inject, on_present))  # last: a run paused inside RunGuard must still pass through it on resume
     return create_agent(
         model,
         tools=tools,

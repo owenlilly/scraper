@@ -211,13 +211,25 @@ class FollowupInbox(AgentMiddleware):
 
     state_schema = GuardState
 
-    def __init__(self, pending: Callable[[], list[dict]], on_inject: Callable[[dict], None] | None = None) -> None:
-        self._pending = pending
+    def __init__(
+        self,
+        pending: Callable[[], list[dict]],
+        on_inject: Callable[[dict], None] | None = None,
+        on_present: Callable[[dict], None] | None = None,
+    ) -> None:
+        self._pending = pending  # every follow-up on the run: the conversation, not a flag, says which are read
         self._on_inject = on_inject
+        self._on_present = on_present
 
     def _waiting(self, messages) -> list[dict]:
         seen = {message.id for message in messages if message.id}
-        return [followup for followup in self._pending() if followup["id"] not in seen]
+        waiting = []
+        for followup in self._pending():
+            if followup["id"] not in seen:
+                waiting.append(followup)
+            elif self._on_present is not None and not followup["delivered"]:
+                self._on_present(followup)  # the agent has it but the flag was lost: let the owner reconcile
+        return waiting
 
     def before_model(self, state, runtime):
         waiting = self._waiting(state["messages"])

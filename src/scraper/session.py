@@ -188,6 +188,15 @@ class Session:
         self._save_run()
         return SteerResult("queued", followup["id"])
 
+    def _adopt_followup(self, followup: dict) -> None:
+        """The agent has this message in its conversation: record it as read and let its hosts through."""
+        self._toolbox.allowed_hosts.update(h for h in hosts_in(followup["text"]) if h)
+        for own in self.run.followups:
+            if own["id"] == followup["id"]:
+                own["delivered"] = True
+        self.run.allowed_hosts = sorted(self._toolbox.allowed_hosts)
+        self._save_run()
+
     def _undelivered(self) -> list[dict]:
         return [f for f in self.run.followups if not f["delivered"]] if self.run is not None else []
 
@@ -406,8 +415,9 @@ class Session:
                 1000, int(window * self.cfg.context_fraction) - ctx.estimate_tokens(run.system_prompt) - self.cfg.reply_reserve
             ),
             on_grant=lambda reason, toolbox=self._toolbox, run=run: self._grant_pages(toolbox, run),
-            followups=self._undelivered,
+            followups=lambda: list(self.run.followups) if self.run is not None else [],
             on_inject=lambda followup, toolbox=self._toolbox: toolbox.allowed_hosts.update(h for h in hosts_in(followup["text"]) if h),
+            on_present=self._adopt_followup,
         )
         self._runner = AgentRunner(agent, max_steps=self.cfg.agent_max_steps, base_url=self.llm.base_url, provider=self.llm.name)
 
@@ -435,6 +445,7 @@ class Session:
             system += f"\n\nPages already gathered (untrusted data):\n{context.text}"
         allowed = {host_of(page.url) for page in self.pages} | hosts_in(instruction) | hosts_in(seed_url or "")
         allowed.discard("")
+        self._stopped_drafts.extend(self._take_undelivered())  # a resumable run being replaced must not swallow queued messages
         self.run = RunRecord(
             number=self._next_run_number(),
             instruction=instruction,
@@ -530,9 +541,7 @@ class Session:
                 elif event.kind == "followup":
                     for followup in run.followups:
                         if followup["id"] == event.id:
-                            followup["delivered"] = True
-                    run.allowed_hosts = sorted(toolbox.allowed_hosts)
-                    self._save_run()
+                            self._adopt_followup(followup)
                 elif event.kind == "needs_input":
                     run.status = "paused"
                     run.pending = event.payload
@@ -544,6 +553,7 @@ class Session:
                     user_stopped = True
                     break
         if user_stopped:
+            self._stopped_drafts.extend(self._take_undelivered())  # typed after Stop, while a fetch was still finishing
             run.status = "stopped"
             run.pending = None
             self._save_run()
@@ -556,6 +566,8 @@ class Session:
     def _finish(self, terminal: AgentEvent, answer: str, reasoning: str) -> None:
         run = self.run
         run.pending = None
+        if terminal.kind == "limit" and terminal.text == "stopped":  # Stop on a limit card: nothing may start from leftovers
+            self._stopped_drafts.extend(self._take_undelivered())
         sources = tuple(dict.fromkeys([*run.fetched_urls, *run.context_sources]))
         self.last_context = ctx.Context("", sources, "full")
         if terminal.kind == "done" and answer.strip():

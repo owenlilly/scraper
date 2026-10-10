@@ -556,6 +556,8 @@ def build_ui(cfg: Config, session: Session) -> None:
 
     async def start_agent(text: str) -> None:
         question.set_value("")
+        queued_box.clear()  # bubbles of a run this instruction replaces; their text comes back as a draft
+        queued.clear()
         turn_state["turn"] = None
         if not session.history:
             chat_box.clear()  # drop the empty-state note
