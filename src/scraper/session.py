@@ -37,7 +37,7 @@ How to work:
 - Use extract with a CSS selector when the user names one or the data repeats on the page. Otherwise read the page text.
 - Record each item you were asked to collect with add_rows: one object per item, with the same keys every time. Add rows as you go, not only at the end.
 - When you are done, reply with a short plain-text summary of what you found. Do not call a tool in your final reply.
-- If a page is blocked or empty, try another fetch mode (dynamic, then stealthy) before giving up.
+{mode_advice}
 
 Asking the user:
 - Call ask_user, with options when you can, if the instruction is ambiguous, a login or CAPTCHA blocks a page, every fetch mode failed, or a choice would change the outcome. Do not guess when a wrong guess wastes many fetches.
@@ -66,8 +66,15 @@ class SteerResult:
     id: str = ""
 
 
+MODE_ADVICE = {
+    True: "- If a page is blocked or empty, try another fetch mode (dynamic, then stealthy) before giving up.",
+    False: "- Only the fast fetch mode is available here. If a page is blocked or empty, say so instead of retrying with another mode.",
+}
+
+
 def agent_system_prompt(cfg: Config) -> str:
-    return AGENT_PROMPT.format(max_steps=cfg.agent_max_steps, max_pages=cfg.agent_max_pages)
+    other_modes = any(mode != "fast" for mode in cfg.allowed_modes)
+    return AGENT_PROMPT.format(max_steps=cfg.agent_max_steps, max_pages=cfg.agent_max_pages, mode_advice=MODE_ADVICE[other_modes])
 
 
 class Session:
@@ -396,6 +403,7 @@ class Session:
             allowed_hosts=set(run.allowed_hosts),
             max_pages=run.max_pages or self.cfg.agent_max_pages,
             grant=self.cfg.agent_max_pages,
+            allowed_modes=self.cfg.allowed_modes,
             result_tokens=self.cfg.tool_result_tokens,
             timeout=self.cfg.fetch_timeout,
             fetched=run.fetched,

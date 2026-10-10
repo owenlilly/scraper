@@ -964,3 +964,18 @@ async def test_a_message_sent_after_stop_while_a_fetch_finishes_is_handed_back()
     assert events[-1].text == "stopped"
     assert session.take_stopped_drafts() == ["late thought"] and session.run.followups == []
     await proceed_all(session)  # let the graph finish so nothing is left pending
+
+
+# ---- the agent prompt follows the fetch modes on offer ---------------------------
+
+
+def test_the_agent_prompt_advises_other_modes_only_when_they_exist():
+    from scraper.session import agent_system_prompt
+
+    local = agent_system_prompt(Config())
+    hosted = agent_system_prompt(Config(hosted=True))
+    assert "dynamic, then stealthy" in local
+    assert "dynamic, then stealthy" not in hosted
+    assert "Only the fast fetch mode is available" in hosted
+
+
