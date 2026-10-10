@@ -21,6 +21,13 @@ afterAll(() => h.pool.end());
 
 const exists = async (email: string) => (await h.userIdOf(email)) !== undefined;
 
+/** What a person needs to carry on after a failed deletion: their account, their password record and their sessions. */
+const footprint = async (email: string) => {
+  const id = await h.userIdOf(email);
+  const count = async (table: string) => Number((await h.pool.query(`SELECT count(*) FROM auth.${table} WHERE "userId" = $1`, [id])).rows[0].count);
+  return { user: id !== undefined, accounts: await count("account"), sessions: await count("session") };
+};
+
 describe("deleting an account", () => {
   it("asks the Python API to erase the person's data first, and only then removes the account", async () => {
     behaviour = async () => {};
@@ -47,10 +54,14 @@ describe("deleting an account", () => {
       throw new AccountDataError(409);
     };
     const cookie = await h.makeUser("busy@example.com");
+    const before = await footprint("busy@example.com");
     const response = await h.call("/delete-user", { cookie, body: { password: PASSWORD } });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "ACCOUNT_DATA_NOT_DELETED" });
-    expect(await exists("busy@example.com")).toBe(true);
+    expect(await footprint("busy@example.com")).toEqual(before); // nothing was taken away, not even their sessions or password
+    expect((await h.call("/get-session", { cookie })).status).toBe(200);
+    expect(await (await h.call("/get-session", { cookie })).json()).not.toBeNull();
+    expect((await h.signIn("busy@example.com")).status).toBe(200); // so they can sign in and try again
   });
 
   it.each([0, 401, 500])("keeps the account when the Python API answers %i", async (status) => {
@@ -58,11 +69,24 @@ describe("deleting an account", () => {
       throw new AccountDataError(status);
     };
     const email = `api-${status}@example.com`;
-    await h.makeUser(email);
+    const cookie = await h.makeUser(email);
     const id = (await h.userIdOf(email))!;
+    const before = await footprint(email);
     const response = await h.call("/admin/remove-user", { cookie: admin, body: { userId: id } });
     expect(response.status).toBe(502);
-    expect(await exists(email)).toBe(true);
+    expect(await footprint(email)).toEqual(before);
+    expect(await (await h.call("/get-session", { cookie })).json()).not.toBeNull();
+    expect((await h.signIn(email)).status).toBe(200);
+  });
+
+  it("refuses an administrator removing themselves, without erasing anything of theirs first", async () => {
+    behaviour = async () => {};
+    const asked = calls.length;
+    const adminId = (await h.userIdOf("owner@example.com"))!;
+    const response = await h.call("/admin/remove-user", { cookie: admin, body: { userId: adminId } });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(calls.length).toBe(asked); // the Python API was not asked to erase the administrator's data
+    expect(await exists("owner@example.com")).toBe(true);
   });
 
   it("does not let an ordinary person remove someone else", async () => {
@@ -70,8 +94,11 @@ describe("deleting an account", () => {
     const mallory = await h.makeUser("mallory@example.com");
     await h.makeUser("victim@example.com");
     const id = (await h.userIdOf("victim@example.com"))!;
+    const asked = calls.length;
     expect([401, 403]).toContain((await h.call("/admin/remove-user", { cookie: mallory, body: { userId: id } })).status);
+    expect([401, 403]).toContain((await h.call("/admin/remove-user", { body: { userId: id } })).status); // not signed in at all
     expect(await exists("victim@example.com")).toBe(true);
+    expect(calls.length).toBe(asked); // and the Python API was never asked to erase the victim's data on their behalf
   });
 
   it("needs the password to delete your own account", async () => {

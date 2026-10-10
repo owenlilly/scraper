@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { admin, jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
@@ -28,6 +28,23 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     return rowCount === 0;
   }
 
+  /**
+   * Ask the Python API to erase a person's data, and refuse to go on if it cannot. This must happen BEFORE anything of the
+   * account is touched: Better Auth removes a person's sessions and password record first and the user row last, so a refusal
+   * at the last step would leave them unable to sign in and try again. The API's erase can safely be repeated.
+   */
+  async function eraseApiData(userId: string): Promise<void> {
+    try {
+      await accountData.delete(userId);
+    } catch (error) {
+      const status = error instanceof AccountDataError ? error.status : 0;
+      throw new APIError(status === 409 ? "CONFLICT" : "BAD_GATEWAY", {
+        message: status === 409 ? "A run is still stopping. Try again in a few seconds." : "Could not delete your data. Try again shortly.",
+        code: "ACCOUNT_DATA_NOT_DELETED",
+      });
+    }
+  }
+
   return betterAuth({
     appName: "Page Chat",
     baseURL: env.baseUrl,
@@ -48,12 +65,21 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
       sendVerificationEmail: async ({ user, url }) => sendEmail(verifyMessage({ to: user.email, url })),
     },
     session: { expiresIn: 7 * DAY, updateAge: DAY },
-    user: { deleteUser: { enabled: true } },
+    user: { deleteUser: { enabled: true, beforeDelete: async (user) => eraseApiData(user.id) } },
     advanced: { useSecureCookies: env.production },
     rateLimit: { enabled: env.production, storage: "database", window: 60, max: 60 },
     hooks: {
       // Invite-only: an account can be created only with the single-use token that was emailed to that exact address.
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === "/admin/remove-user") {
+          // An administrator removing someone: Better Auth's own admin route never calls `beforeDelete`, so do the erase here, but only
+          // for a real administrator removing someone else (the route refuses self-removal, and must not erase a person's data first).
+          const session = await getSessionFromCtx(ctx);
+          const caller = session?.user as { id: string; role?: string | null; banned?: boolean | null } | undefined;
+          const target = (ctx.body as { userId?: unknown } | undefined)?.userId;
+          if (caller?.role === "admin" && !caller.banned && typeof target === "string" && target && target !== caller.id) await eraseApiData(target);
+          return;
+        }
         if (ctx.path !== "/sign-up/email") return;
         const email = String((ctx.body as { email?: unknown } | undefined)?.email ?? "");
         if (!email || (await mayBecomeFirstAdmin(email))) return; // an empty address fails the sign-up's own validation
@@ -68,18 +94,8 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
           after: async (user) => invites.consume(user.email),
         },
         delete: {
-          // The Python API's copy of the person's data goes first. If that cannot be done, the account stays and the deletion can be retried.
-          before: async (user) => {
-            try {
-              await accountData.delete(user.id);
-            } catch (error) {
-              const status = error instanceof AccountDataError ? error.status : 0;
-              throw new APIError(status === 409 ? "CONFLICT" : "BAD_GATEWAY", {
-                message: status === 409 ? "A run is still stopping. Try again in a few seconds." : "Could not delete your data. Try again shortly.",
-                code: "ACCOUNT_DATA_NOT_DELETED",
-              });
-            }
-          },
+          // A last line of defence for any other way a user can be removed. The paths above have already erased the data.
+          before: async (user) => eraseApiData(user.id),
         },
       },
     },
