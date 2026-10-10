@@ -20,6 +20,7 @@ from .errors import ApiError, api_error_handler, validation_error_handler
 from .pgstore import PgUsageStore
 from .registry import RateLimiter, RunSlots, SessionRegistry
 from .routes import router as state_router
+from .streams import router as stream_router
 
 log = logging.getLogger("scraper_api")
 EVICT_EVERY_SECONDS = 60
@@ -88,4 +89,5 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         return response
 
     app.include_router(state_router)
+    app.include_router(stream_router)
     return app
