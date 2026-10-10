@@ -32,3 +32,26 @@ def pg(pg_pool):
     return pg_pool
 
 
+@pytest.fixture
+async def api(pg):
+    from api_support import Harness
+
+    harness = Harness(pg).build()
+    yield harness
+    await harness.close()
+
+
+@pytest.fixture
+async def make_api(pg):
+    from api_support import Harness
+
+    made = []
+
+    def build(**overrides):
+        harness = Harness(pg, **overrides).build()
+        made.append(harness)
+        return harness
+
+    yield build
+    for harness in made:
+        await harness.close()
