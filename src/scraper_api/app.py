@@ -17,6 +17,7 @@ from .catalog import ModelCatalog
 from .db import make_pool, migrate, open_checkpointer
 from .deps import Deps
 from .errors import ApiError, api_error_handler, validation_error_handler
+from .limits import BodyLimitMiddleware
 from .pgstore import PgUsageStore
 from .registry import RateLimiter, RunSlots, SessionRegistry
 from .routes import router as state_router
@@ -71,6 +72,7 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
         app.state.deps = deps
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_middleware(BodyLimitMiddleware)  # added first, so CORS wraps it and a refusal still carries the CORS headers
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(cfg.cors_origin_list),
