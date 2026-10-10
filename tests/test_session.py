@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import replace
 
@@ -989,6 +990,7 @@ async def test_a_dropped_connection_leaves_the_run_stopped_and_resumable():
     first = await anext(stream)  # the browser read one event, then went away
     assert first.kind in ("step", "reasoning", "answer", "tool_start")
     await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
     assert session.busy is False  # nothing else is blocked behind the dead stream
     assert session.run.status == "running"  # nobody has said otherwise yet
     session.release_after_disconnect()
@@ -1004,6 +1006,7 @@ async def test_messages_the_agent_never_read_are_handed_back_when_the_connection
     await anext(stream)
     assert session.steer("also the footer").status == "queued"
     await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
     session.release_after_disconnect()
     assert session.take_stopped_drafts() == ["also the footer"]
 
