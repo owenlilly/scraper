@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { admin } from "better-auth/plugins";
+import { admin, jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
 import type { AccountDataClient } from "./account-data";
 import { resetMessage, verifyMessage, type EmailSender } from "./email";
@@ -68,6 +68,16 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
     },
     plugins: [
       admin(),
+      jwt({
+        jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" }, rotationInterval: 30 * DAY, gracePeriod: 30 * DAY },
+        jwt: {
+          issuer: env.baseUrl,
+          audience: env.apiAudience,
+          expirationTime: "15m",
+          definePayload: () => ({}), // the default puts the whole user, email and name included, in the token; the API needs only `sub`
+          getSubject: ({ user }) => user.id,
+        },
+      }),
       nextCookies(), // keep last
     ],
   });
