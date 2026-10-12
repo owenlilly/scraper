@@ -19,7 +19,7 @@ def test_no_source_file_mentions_nicegui():
 
 
 def test_the_old_interface_modules_are_gone():
-    for name in ("scraper.app", "scraper.theme", "scraper.__main__"):
+    for name in ("scraper.app", "scraper.theme"):
         assert importlib.util.find_spec(name) is None, f"{name} should have been removed"
 
 

@@ -1,4 +1,4 @@
-/** The shapes the Python API sends. They mirror `src/scraper_api/schemas.py` and the agent's events. */
+/** The shapes the Python API sends. They mirror `src/scraper/api/schemas.py` and the agent's events. */
 
 export type Usage = { day: string; model_calls: number; model_calls_limit: number; pages: number; pages_limit: number; resets_at: string };
 export type PageSummary = { url: string; title: string; chars: number; links: number; looks_empty: boolean; used: boolean };
@@ -41,12 +41,14 @@ export type RunView = {
   trace: TraceEntry[];
   followups: Followup[];
 };
+export type ProviderView = { key: string; name: string; hosted: boolean };
 export type ModelView = { id: string; context: number | null; loaded: boolean };
-export type SettingName = "url" | "mode" | "follow" | "depth" | "agent";
+export type SettingName = "url" | "mode" | "follow" | "depth" | "agent" | "browser";
 
 export type WorkspaceState = {
   user: { id: string };
-  provider: { key: string; name: string; hosted: boolean };
+  provider: ProviderView;
+  providers: ProviderView[];
   busy: boolean;
   pages: PageSummary[];
   failed: { url: string; reason: string }[];
@@ -59,6 +61,7 @@ export type WorkspaceState = {
   models: ModelView[];
   models_error: string | null;
   fetch_modes: string[];
+  browser_available: boolean;
   usage: Usage;
 };
 
@@ -75,6 +78,4 @@ export type AgentEvent = {
   payload: Record<string, unknown>;
   id: string;
 };
-export type AskEvent = { kind: "reasoning" | "answer" | "error"; text: string };
-export type ServerErrorFrame = { kind: "error"; code?: string; text: string };
 export type EndFrame = { drafts: string[]; leftovers: string[]; interrupted: boolean; usage: Usage };

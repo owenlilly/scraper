@@ -1,42 +1,67 @@
-.live { display: grid; gap: 0.5rem; border: 1px solid var(--rule); border-radius: 10px; padding: 0.7rem 0.9rem; background: var(--surface); }
+/* What the run needs right now (status strip or question) and the box the person types in. */
+.live {
+  position: relative; overflow: hidden; display: grid; gap: 0.4rem; width: min(100% - 2.5rem, 44rem); margin: 0 auto 0.75rem; padding: 0.75rem 1rem;
+  border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet); box-shadow: var(--shadow-s);
+}
+/* A thin bar slides along the top edge while the agent works, and stops when it does. */
+.live::before {
+  content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 35%; background: var(--accent); animation: sweep 1.6s ease-in-out infinite;
+}
+.live.stopped::before { animation: none; width: 100%; background: var(--muted); opacity: 0.35; }
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 .live .line { display: flex; align-items: center; gap: 0.6rem; }
 .live .pulse { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; flex: none; }
 .live.stopped .pulse { animation: none; background: var(--muted); }
 .live .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.live.stopped .line { flex-wrap: wrap; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
 .question {
-  width: min(100% - 2.5rem, 44rem); margin: 0 auto 0.75rem; padding: 0.9rem 1rem; border: 1.5px solid var(--accent); border-radius: 10px; background: var(--surface);
-  display: grid; gap: 0.7rem; box-shadow: var(--shadow);
+  width: min(100% - 2.5rem, 44rem); margin: 0 auto 0.75rem; padding: 1rem 1.1rem; border: 1px solid var(--accent); border-left-width: 4px; border-radius: var(--radius);
+  background: var(--sheet); display: grid; gap: 0.75rem; box-shadow: var(--shadow);
 }
 .question p.q { font-family: var(--font-read); font-size: var(--step-1); line-height: 1.5; }
 .question .options, .composer .row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .question .free { display: flex; gap: 0.5rem; }
 .question .free input { flex: 1; min-width: 0; }
 
-.composer-wrap { padding: 0 1.25rem 1.1rem; }
+.composer-wrap { padding: 0 1.25rem 1.25rem; }
 .composer {
-  width: min(100%, 44rem); margin: 0 auto; border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); padding: 0.6rem 0.7rem 0.7rem;
-  display: grid; gap: 0.5rem;
+  width: min(100%, 44rem); margin: 0 auto; border: 1px solid var(--rule); border-radius: var(--radius-l); background: var(--surface); padding: 0.65rem 0.75rem 0.75rem;
+  display: grid; gap: 0.5rem; box-shadow: var(--shadow-s); transition: border-color 120ms ease, box-shadow 120ms ease;
 }
-.composer:focus-within { border-color: var(--accent); }
-.composer textarea { width: 100%; resize: none; border: 0; background: transparent; padding: 0.3rem 0.2rem; min-height: 3.2rem; outline: none; font-family: var(--font-read); font-size: var(--step-1); line-height: 1.5; }
+.composer:focus-within { border-color: var(--accent); box-shadow: var(--ring); }
+.composer textarea {
+  width: 100%; resize: none; border: 0; background: transparent; padding: 0.35rem 0.25rem; min-height: 3.4rem; outline: none;
+  font-family: var(--font-read); font-size: var(--step-1); line-height: 1.5;
+}
 .composer .row { align-items: center; }
 .composer .row .grow { flex: 1; }
-.seg { display: inline-flex; background: var(--sunken); border-radius: 8px; padding: 2px; }
-.seg button { border: 0; background: transparent; padding: 0.2rem 0.7rem; border-radius: 6px; font-size: var(--step--1); font-weight: 560; color: var(--muted); }
-.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
-.field-inline { display: inline-flex; align-items: center; gap: 0.4rem; font-size: var(--step--1); color: var(--muted); }
-.field-inline input[type="text"] { width: 15rem; max-width: 100%; }
-select { padding-right: 1.6rem; }
+.composer .row + textarea + .row { padding-top: 0.5rem; border-top: 1px solid var(--rule); }
+.composer .row:first-child select { min-height: 2rem; padding: 0.2rem 1.7rem 0.2rem 0.6rem; font-size: var(--step--1); background-color: transparent; border-color: transparent; color: var(--muted); max-width: 11rem; text-overflow: ellipsis; }
+.composer .row:first-child select:hover:not(:disabled) { border-color: var(--rule); color: var(--ink); }
+.composer .row:first-child select:focus { border-color: var(--accent); }
+.seg { display: inline-flex; background: var(--sunken); border-radius: var(--radius); padding: 3px; }
+.seg button { border: 0; background: transparent; padding: 0.25rem 0.8rem; border-radius: 7px; font-size: var(--step--1); font-weight: 600; color: var(--muted); transition: background-color 120ms ease, color 120ms ease; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14); }
+.field-inline { display: inline-flex; align-items: center; gap: 0.45rem; font-size: var(--step--1); color: var(--muted); }
+.field-inline input[type="text"] { width: 15rem; max-width: 100%; min-height: 2rem; padding: 0.2rem 0.6rem; font-size: var(--step--1); }
+.composer input[type="checkbox"] { width: 1rem; height: 1rem; }
+.composer .send { min-width: 5rem; }
+.composer .notice { padding: 0.5rem 0.7rem; border-radius: var(--radius); background: var(--bad-soft); font-size: var(--step--1); }
 
-.live.stopped .line { flex-wrap: wrap; }
-.composer input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--accent); }
-.composer .notice { padding: 0.5rem 0.7rem; border-radius: 8px; background: var(--bad-soft); font-size: var(--step--1); }
 @media (max-width: 900px) {
-  .composer-wrap { padding-inline: 1rem; }
-  .question { width: calc(100% - 2rem); }
+  .composer-wrap { padding-inline: 1rem; padding-bottom: 1rem; }
+  .question, .live { width: calc(100% - 2rem); }
   .field-inline input[type="text"] { width: 100%; }
   .field-inline { flex: 1 1 100%; }
+  .field-inline input[type="checkbox"] { flex: none; }
 }
-@media (prefers-reduced-motion: reduce) { .live .pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .live .pulse { animation: none; }
+  .live::before { animation: none; width: 100%; opacity: 0.25; }
+  .composer, .seg button { transition: none; }
+}
+.field-inline { white-space: nowrap; }
+.field-inline input[type="text"] { flex: 1; }

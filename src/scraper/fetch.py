@@ -1,16 +1,17 @@
 """Scrapling wrapper: URL + mode -> cleaned markdown Page."""
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 from scrapling.parser import Selector
 
-Mode = Literal["fast", "dynamic", "stealthy"]
+from . import debuglog
+
 MODES = ("fast", "dynamic", "stealthy")
 NOISE_TAGS = ["script", "style", "noscript", "svg", "nav", "footer", "aside", "iframe", "form"]
 EMPTY_THRESHOLD = 200
@@ -36,6 +37,11 @@ class FetchError(Exception):
         self.message = message
         self.hint = hint
         self.retry_mode = retry_mode
+
+    @property
+    def text(self) -> str:
+        """The message with its hint, as the model is told."""
+        return self.message + (f" {self.hint}" if self.hint else "")
 
 
 def validate_url(raw: str) -> str:
@@ -103,7 +109,7 @@ def _stealthy(url: str, timeout: float):
 DEFAULT_BACKENDS: dict[str, Callable] = {"fast": _fast, "dynamic": _dynamic, "stealthy": _stealthy}
 
 
-def _http_error(status: int, url: str) -> FetchError:
+def http_error(status: int, url: str) -> FetchError:
     hint, retry = None, None
     if status in (401, 403, 429):
         hint, retry = "The site may be blocking simple requests. Try Stealthy mode.", "stealthy"
@@ -112,7 +118,7 @@ def _http_error(status: int, url: str) -> FetchError:
     return FetchError(f"HTTP {status} from {url}", hint=hint, retry_mode=retry)
 
 
-def _translate(exc: Exception, mode: str, url: str) -> FetchError:
+def translate_error(exc: Exception, mode: str, url: str) -> FetchError:
     text = str(exc)
     if mode != "fast" and any(marker in text for marker in BROWSER_MISSING):
         return FetchError(
@@ -136,16 +142,50 @@ def fetch(url: str, mode: str = "fast", *, timeout: float = 20.0, backends: dict
         raise ValueError(f"unknown mode {mode!r}")
     url = validate_url(url)
     backend = (backends or DEFAULT_BACKENDS)[mode]
+    debuglog.event("fetch.request", url=url, mode=mode, timeout=timeout)
+    ms = debuglog.stopwatch()
     try:
         response = backend(url, timeout)
     except Exception as exc:
-        raise _translate(exc, mode, url) from exc
+        error = translate_error(exc, mode, url)
+        debuglog.event("fetch.error", url=url, mode=mode, ms=ms(), error=f"{type(exc).__name__}: {exc}", message=error.message)
+        raise error from exc
     status = int(response.status)
-    if status >= 400:
-        raise _http_error(status, url)
     ctype = _content_type(response)
+    if status >= 400:
+        error = http_error(status, url)
+        debuglog.event("fetch.error", url=url, mode=mode, ms=ms(), status=status, content_type=ctype, error=error.message, retry_mode=error.retry_mode)
+        raise error
+    try:
+        page = page_from(response, url, mode=mode)
+    except FetchError as exc:
+        debuglog.event("fetch.error", url=url, mode=mode, ms=ms(), status=status, content_type=ctype, error=exc.message)
+        raise
+    debuglog.event(
+        "fetch.response", url=url, mode=mode, ms=ms(), status=status, final_url=page.url, content_type=ctype.split(";")[0],
+        bytes=len(str(getattr(response, "html_content", ""))), title=page.title, chars=len(page.markdown), links=len(page.links),
+        looks_empty=page.looks_empty, headers=dict(getattr(response, "headers", None) or {}), preview=debuglog.preview(page.markdown),
+    )
+    return page
+
+
+def parse_json_page(text: str, url: str) -> Page:
+    """A JSON response (an API) as a page whose text is the formatted JSON, so the model can read it and copy values out of it."""
+    try:
+        text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+    except ValueError:
+        pass  # not valid JSON after all: show it as it came
+    return Page(url=url, title=url, markdown=f"```json\n{text}\n```", html="")
+
+
+def page_from(response, url: str, *, mode: str = "dynamic") -> Page:
+    """What a fetcher's response is shown as: HTML is cleaned to markdown, JSON is formatted, anything else is refused."""
+    ctype = _content_type(response)
+    final_url = str(getattr(response, "url", None) or url)
+    if "json" in ctype:
+        return parse_json_page(str(response.html_content), final_url)
     if ctype and not any(token in ctype for token in ("html", "xml", "text/plain")):
         raise FetchError(f"{url} is not an HTML page ({ctype.split(';')[0]})")
-    final_url = str(getattr(response, "url", None) or url)
     page = parse_html(str(response.html_content), final_url)
     return replace(page, looks_empty=(mode == "fast" and len(page.markdown) < EMPTY_THRESHOLD))
+

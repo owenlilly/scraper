@@ -6,10 +6,10 @@ import socket
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
+from .crawl import DEFAULT_PORTS
 from .fetch import FetchError
 
 ALLOWED_PORTS = frozenset({80, 443, 8080, 8443})
-DEFAULT_PORTS = {"http": 80, "https": 443}
 _NUMBER = r"(?:0[xX][0-9a-fA-F]*|[0-9]+)"  # one label written as decimal, octal or hex
 _NUMERIC_HOST = re.compile(rf"^{_NUMBER}(?:\.{_NUMBER})*\.?$")
 _ODD_CHARACTERS = re.compile(r"[\x00-\x20\x7f\\]")  # control characters, spaces and backslashes: parsers disagree on these

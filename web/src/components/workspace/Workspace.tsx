@@ -9,6 +9,7 @@ import type { Person } from "./AccountMenu";
 import { SESSION_ENDED, useApi } from "./ApiProvider";
 import { SignOutButton } from "../SignOutButton";
 import { Dialog } from "../Dialog";
+import { Toast, useToast } from "../Toast";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { ResultsPane } from "./ResultsPane";
 import { Conversation } from "./Conversation";
@@ -23,7 +24,7 @@ export function Workspace({ person }: { person: Person }) {
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [confirmNew, setConfirmNew] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useToast();
   const [drafts, setDrafts] = useState<string[]>([]);
   const run = useRun({ onNotice: setToast, onDrafts: useCallback((texts: string[]) => setDrafts(texts), []) });
 
@@ -32,11 +33,6 @@ export function Workspace({ person }: { person: Person }) {
     // the person to sign in, because sign-in sends them straight back here.
     if (state.error instanceof ApiError && state.error.code === SESSION_ENDED) router.replace("/sign-in");
   }, [state.error, router]);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 3200);
-    return () => clearTimeout(timer);
-  }, [toast]);
 
   const data = state.data;
 
@@ -122,11 +118,7 @@ export function Workspace({ person }: { person: Person }) {
         <p>This clears the pages, results and chat, and any run that is waiting. Your settings stay.</p>
       </Dialog>
       <DeleteAccountDialog open={deleting} onClose={() => setDeleting(false)} />
-      {toast ? (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      ) : null}
+      <Toast message={toast} />
     </div>
   );
 }

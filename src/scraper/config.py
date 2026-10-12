@@ -21,9 +21,15 @@ HOSTED_REQUIRED = {
 }
 
 
+def _csv(text: str) -> tuple[str, ...]:
+    """The non-empty, trimmed items of a comma-separated setting."""
+    return tuple(item.strip() for item in text.split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class Config:
     provider: str = "lmstudio"
+    providers: str = ""  # hosted: comma-separated providers people may choose between, besides `provider`; empty offers only `provider`
     api_key: str = field(default="", repr=False)
     base_url: str = "http://localhost:1234/v1"  # LM Studio
     mistral_base_url: str = MISTRAL_BASE_URL
@@ -50,6 +56,15 @@ class Config:
     service_secret: str = field(default="", repr=False)  # lets the web app call the account-deletion route
     cors_origins: str = ""  # comma-separated browser origins allowed to call the API
     cors_origin_regex: str = ""  # optional pattern, for preview deployments
+    fetch_fallback: bool = True  # fetch_page tries a more capable fetch mode itself when a page is blocked or comes back empty
+    compact_context: bool = True  # when a run outgrows the context, the model summarises the older work instead of it being cut
+    web_search: bool = True  # lets the agent search the web (Exa); the query, not page text, is sent to the search service
+    exa_url: str = "https://mcp.exa.ai/mcp"  # Exa's hosted MCP server, open to use without a key
+    exa_api_key: str = field(default="", repr=False)  # optional: raises the search service's rate limit
+    debug: bool = False  # write a local log of fetches, browser actions, searches, tool calls and runs for review (see debuglog.py)
+    debug_dir: str = "debug-logs"
+    debug_body_chars: int = 500  # how much of a page, search result or tool result a log line keeps; 0 keeps none
+    browser: bool = True  # lets the agent use a real browser to fill in forms, click, scroll and see a page's network requests, whatever fetch_modes allows
     fetch_modes: str = ""  # comma-separated; empty means every mode locally and only "fast" when hosted
     allowed_models: str = ""  # comma-separated model ids users may pick when hosted; empty means any the provider lists
     daily_model_calls: int = 300  # per user per UTC day
@@ -57,6 +72,7 @@ class Config:
     max_stored_pages: int = 60  # per user
     max_page_chars: int = 200_000  # stored per page; longer text is cut
     max_result_rows: int = 2000  # per user
+    access_log: bool = True  # one line per request: method, path, status. Page addresses and prompts travel in bodies, never in paths
     max_concurrent_runs: int = 5  # across all users: the API is one process
     requests_per_minute: int = 120  # per user, on routes that do not stream
 
@@ -64,22 +80,22 @@ class Config:
     def available_providers(self) -> tuple[str, ...]:
         """LM Studio is always offered locally; Mistral once a key is set. Hosted offers only the one it is set to use."""
         if self.hosted:
-            return (self.provider,)
+            return tuple(dict.fromkeys([self.provider, *_csv(self.providers)]))
         return ("lmstudio", "mistral") if self.api_key else ("lmstudio",)
 
     @property
     def allowed_modes(self) -> tuple[str, ...]:
         if self.fetch_modes.strip():
-            return tuple(m.strip() for m in self.fetch_modes.split(",") if m.strip())
+            return _csv(self.fetch_modes)
         return ("fast",) if self.hosted else FETCH_MODES
 
     @property
     def allowed_model_list(self) -> tuple[str, ...]:
-        return tuple(m.strip() for m in self.allowed_models.split(",") if m.strip())
+        return _csv(self.allowed_models)
 
     @property
     def cors_origin_list(self) -> tuple[str, ...]:
-        return tuple(o.strip() for o in self.cors_origins.split(",") if o.strip())
+        return _csv(self.cors_origins)
 
 
 def _parse(kind: type, raw: str, key: str):
@@ -125,9 +141,13 @@ def load(env: Mapping[str, str] | None = None) -> Config:
     if provider == "mistral" and not overrides.get("hosted"):  # hosted mode reports its own, clearer, missing-key error below
         if not overrides.get("api_key"):
             raise ValueError(f"{ENV_PREFIX}PROVIDER=mistral needs {ENV_PREFIX}API_KEY (or MISTRAL_API_KEY)")
+    offered = _csv(overrides.get("providers", ""))
+    unknown_providers = [p for p in offered if p not in PROVIDERS]
+    if unknown_providers:
+        raise ValueError(f"{ENV_PREFIX}PROVIDERS has unknown provider(s) {', '.join(unknown_providers)}; use {', '.join(PROVIDERS)}")
     if overrides.get("hosted"):
         for name, variable in HOSTED_REQUIRED.items():
-            if name == "api_key" and provider != "mistral":  # a model server you run needs no key
+            if name == "api_key" and "mistral" not in (provider, *offered):  # a model server you run needs no key
                 continue
             if not overrides.get(name):
                 raise ValueError(f"{ENV_PREFIX}HOSTED needs {variable}")

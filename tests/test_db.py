@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 
-from scraper_api.db import migrate
+from scraper.api.db import migrate
 
 
 class FakeConn:

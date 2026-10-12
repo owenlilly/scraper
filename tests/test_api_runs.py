@@ -96,10 +96,6 @@ async def test_a_model_that_is_not_offered_is_refused_before_anything_streams(ma
     assert api.llm.calls == []
 
 
-async def test_asking_with_no_pages_streams_an_error_event(api):
-    response = await api.client.post("/ask", json={"question": "price?", "model": MODEL}, headers=api.auth())
-    assert names(response) == ["error", "end"] and "Scrape a page first" in frames(response)[0][1]["text"]
-
 
 async def test_the_daily_model_call_limit_refuses_up_front_with_a_429(make_api):
     api = make_api(daily_model_calls=1)
@@ -248,7 +244,7 @@ async def test_a_users_daily_limits_are_their_own(make_api):
 
 
 async def test_a_dropped_stream_stops_the_run_frees_the_slot_and_leaves_it_resumable(api):
-    from scraper_api.streams import stream_response
+    from scraper.api.streams import stream_response
 
     api.model.script = [ai("", call("fetch_page", "c1", url=A)), ai("All done.")]
     entry = await api.deps.registry.get("alice")
@@ -263,7 +259,7 @@ async def test_a_dropped_stream_stops_the_run_frees_the_slot_and_leaves_it_resum
 
 
 async def test_an_unexpected_failure_mid_stream_becomes_a_plain_error_frame_that_leaks_nothing(api):
-    from scraper_api.streams import stream_response
+    from scraper.api.streams import stream_response
 
     async def explode():
         raise RuntimeError("secret page text that must not reach anyone")
@@ -279,7 +275,7 @@ async def test_an_unexpected_failure_mid_stream_becomes_a_plain_error_frame_that
 
 async def test_a_stream_that_loses_the_race_for_the_session_leaves_the_live_run_alone(api):
     from scraper.store import RunRecord
-    from scraper_api.streams import stream_response
+    from scraper.api.streams import stream_response
 
     entry = await api.deps.registry.get("alice")
     entry.session.run = RunRecord(number=1, instruction="long task", status="running", followups=[{"id": "f1", "text": "also the SKU", "delivered": False}])

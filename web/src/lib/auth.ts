@@ -8,6 +8,7 @@ import { AccountDataError, type AccountDataClient } from "./account-data";
 import { resetMessage, verifyMessage, type EmailSender } from "./email";
 import type { WebEnv } from "./env";
 import { InviteStore, normalizeEmail } from "./invites";
+import { isActiveAdmin } from "./roles";
 
 export const INVITE_HEADER = "x-invite-token";
 export const INVITE_REQUIRED_MESSAGE = "Sign-up needs a valid invitation for this email address.";
@@ -87,7 +88,7 @@ export function createAuth({ env, pool, sendEmail, invites, accountData }: AuthD
           const session = await getSessionFromCtx(ctx);
           const caller = session?.user as { id: string; role?: string | null; banned?: boolean | null } | undefined;
           const target = (ctx.body as { userId?: unknown } | undefined)?.userId;
-          if (caller?.role === "admin" && !caller.banned && typeof target === "string" && target && target !== caller.id) await eraseApiData(target);
+          if (caller && isActiveAdmin(caller) && typeof target === "string" && target && target !== caller.id) await eraseApiData(target);
           return;
         }
         if (ctx.path !== "/sign-up/email") return;

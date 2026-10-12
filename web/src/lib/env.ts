@@ -9,9 +9,10 @@ export type WebEnv = {
   apiUrl: string;
   apiAudience: string;
   serviceSecret: string;
-  emailTransport: "resend" | "log";
+  emailTransport: "resend" | "log" | "mailpit";
   resendApiKey: string;
   emailFrom: string;
+  mailpitUrl: string;
   adminEmail: string | null;
   trustedOrigins: string[];
   trustedProxies: string[];
@@ -29,6 +30,12 @@ function isHttpUrl(value: string): boolean {
     return false;
   }
 }
+
+const csv = (value: string) =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 
 const trimSlash = (value: string) => value.replace(/\/+$/, "");
 
@@ -68,25 +75,22 @@ export function loadEnv(source: Source = process.env): WebEnv {
   const resendApiKey = get("RESEND_API_KEY");
   const requested = get("EMAIL_TRANSPORT");
   const emailTransport = (requested || (resendApiKey ? "resend" : "log")) as WebEnv["emailTransport"];
-  if (emailTransport !== "resend" && emailTransport !== "log") problems.push("EMAIL_TRANSPORT must be resend or log");
+  if (emailTransport !== "resend" && emailTransport !== "log" && emailTransport !== "mailpit") problems.push("EMAIL_TRANSPORT must be resend, mailpit or log");
   if (emailTransport === "log" && production) problems.push("EMAIL_TRANSPORT=log would print invitation links to the server log; use resend in production");
-  const emailFrom = get("EMAIL_FROM");
+  if (emailTransport === "mailpit" && production) problems.push("EMAIL_TRANSPORT=mailpit is for development, where Mailpit catches every message; use resend in production");
+  const mailpitUrl = trimSlash(get("MAILPIT_URL") || "http://127.0.0.1:8025");
+  if (emailTransport === "mailpit" && !isHttpUrl(mailpitUrl)) problems.push("MAILPIT_URL must be Mailpit's web address, such as http://127.0.0.1:8025");
+  const emailFrom = get("EMAIL_FROM") || (emailTransport === "mailpit" ? "Page Chat <no-reply@localhost>" : "");
   if (emailTransport === "resend" && !resendApiKey) problems.push("RESEND_API_KEY is required when EMAIL_TRANSPORT is resend");
   if (emailTransport === "resend" && !emailFrom) problems.push("EMAIL_FROM is required when EMAIL_TRANSPORT is resend, such as Page Chat <no-reply@example.com>");
 
   const adminRaw = get("ADMIN_EMAIL").toLowerCase();
   if (adminRaw && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminRaw)) problems.push("ADMIN_EMAIL must be an email address");
 
-  const trustedOrigins = get("TRUSTED_ORIGINS")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const trustedOrigins = csv(get("TRUSTED_ORIGINS"));
   for (const origin of trustedOrigins) if (!isHttpUrl(origin.replace("*", "x"))) problems.push("TRUSTED_ORIGINS holds an entry that is not an address");
 
-  const trustedProxies = get("TRUSTED_PROXIES")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const trustedProxies = csv(get("TRUSTED_PROXIES"));
   for (const entry of trustedProxies) if (!isProxyEntry(entry)) problems.push("TRUSTED_PROXIES holds an entry that is not an IP address or a range such as 10.0.0.0/8");
 
   const ttl = Number(get("INVITE_TTL_DAYS") || "7");
@@ -95,7 +99,7 @@ export function loadEnv(source: Source = process.env): WebEnv {
   if (problems.length) throw new Error(`Invalid environment:\n- ${problems.join("\n- ")}`); // names only: values may be secrets
 
   return {
-    databaseUrl, authSecret, baseUrl, apiUrl, apiAudience, serviceSecret, emailTransport, resendApiKey, emailFrom,
+    databaseUrl, authSecret, baseUrl, apiUrl, apiAudience, serviceSecret, emailTransport, resendApiKey, emailFrom, mailpitUrl,
     adminEmail: adminRaw || null, trustedOrigins, trustedProxies, inviteTtlDays: ttl, production,
   };
 }

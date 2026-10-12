@@ -79,6 +79,8 @@ async def test_ask_is_charged_and_refused_at_the_limit_without_calling_the_model
 
 async def test_a_question_that_fails_before_the_model_is_not_charged():
     meter = UsageMeter("u1", MemoryUsageStore(), Config(daily_model_calls=5), today=Clock())
-    session = Session(Config(request_delay=0.0), FakeLLM(), make_fetch(WEB), usage=meter)
-    events = [e async for e in session.ask("price?", "qwen-test")]  # no page scraped yet
+    blank = {URL: make_page(URL, markdown="  ")}
+    session = Session(Config(request_delay=0.0), FakeLLM(), make_fetch(blank), usage=meter)
+    await session.scrape(URL)
+    events = [e async for e in session.ask("price?", "qwen-test")]  # the page has no readable text, so nothing is sent
     assert events[0].kind == "error" and meter.snapshot()["model_calls"] == 0

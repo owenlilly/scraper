@@ -6,8 +6,10 @@ session buffer a multi-gigabyte body. The largest legitimate body here is a few 
 
 import json
 
+from .errors import error_body
+
 MAX_BODY_BYTES = 64 * 1024
-_REFUSAL = json.dumps({"error": {"code": "too_large", "message": "That request is too large."}}).encode()
+_REFUSAL = json.dumps(error_body("too_large", "That request is too large.")).encode()
 
 
 class BodyTooLarge(Exception):

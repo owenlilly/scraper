@@ -8,11 +8,11 @@ from jwks_support import AUDIENCE, ISSUER, JWKSServer, Signer
 from scraper.config import Config
 from scraper.llm import Event, ModelInfo
 from scraper.usage import MemoryUsageStore
-from scraper_api.app import create_app
-from scraper_api.auth import JWKSVerifier
-from scraper_api.catalog import ModelCatalog
-from scraper_api.deps import Deps
-from scraper_api.registry import RateLimiter, RunSlots, SessionRegistry
+from scraper.api.app import create_app
+from scraper.api.auth import JWKSVerifier
+from scraper.api.catalog import ModelCatalog
+from scraper.api.deps import Deps
+from scraper.api.registry import RateLimiter, RunSlots, SessionRegistry
 
 A = "https://site.test/a"
 B = "https://site.test/b"
@@ -45,14 +45,15 @@ class Harness:
 
     def build(self):
         registry = SessionRegistry(
-            self.cfg, pool=self.pool, checkpointer=InMemorySaver(), llm=self.llm, usage_store=MemoryUsageStore(),
+            self.cfg, pool=self.pool, checkpointer=InMemorySaver(), llm=self.llm, llms=getattr(self, "llms", None), usage_store=MemoryUsageStore(),
             fetch_base=self._fetch,
             url_check=self.url_check, model_factory=lambda model_id: self.model,
         )
         self.deps = Deps(
             cfg=self.cfg, verifier=JWKSVerifier(self.idp.url, ISSUER, AUDIENCE), registry=registry,
             slots=RunSlots(self.cfg.max_concurrent_runs), limiter=RateLimiter(self.cfg.requests_per_minute),
-            catalog=ModelCatalog(self.llm, self.cfg.allowed_model_list), pool=self.pool,
+            catalogs={k: ModelCatalog(v, self.cfg.allowed_model_list) for k, v in (getattr(self, "llms", None) or {self.llm.key: self.llm}).items()},
+            pool=self.pool,
         )
         self.app = create_app(self.cfg, self.deps)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://api.test")

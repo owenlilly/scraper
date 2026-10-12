@@ -45,6 +45,16 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ ...GOOD, NODE_ENV: "production" })).toThrow(/EMAIL_TRANSPORT=log/);
   });
 
+  it("accepts Mailpit in development with a default address and sender, and refuses it in production", () => {
+    const env = loadEnv({ ...GOOD, EMAIL_TRANSPORT: "mailpit" });
+    expect(env.emailTransport).toBe("mailpit");
+    expect(env.mailpitUrl).toBe("http://127.0.0.1:8025");
+    expect(env.emailFrom).toContain("no-reply@localhost");
+    expect(loadEnv({ ...GOOD, EMAIL_TRANSPORT: "mailpit", MAILPIT_URL: "http://mail:8025/" }).mailpitUrl).toBe("http://mail:8025");
+    expect(() => loadEnv({ ...GOOD, EMAIL_TRANSPORT: "mailpit", MAILPIT_URL: "nope" })).toThrow(/MAILPIT_URL/);
+    expect(() => loadEnv({ ...GOOD, EMAIL_TRANSPORT: "mailpit", NODE_ENV: "production" })).toThrow(/EMAIL_TRANSPORT=mailpit/);
+  });
+
   it("needs a key and a sender address for Resend, and picks Resend when a key is given", () => {
     expect(() => loadEnv({ ...GOOD, EMAIL_TRANSPORT: "resend" })).toThrow(/RESEND_API_KEY/);
     expect(() => loadEnv({ ...GOOD, EMAIL_TRANSPORT: "resend", RESEND_API_KEY: "re_x" })).toThrow(/EMAIL_FROM/);

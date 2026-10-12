@@ -3,7 +3,7 @@
 The hosted service is two programs and one database:
 
 - the web app (Next.js, on Vercel), which owns accounts, sign-in and invitations;
-- this API (`python -m scraper_api`), which owns each person's sessions, runs and results;
+- this API (`python -m scraper`), which owns each person's sessions, runs and results;
 - Postgres, with one schema for each program.
 
 This page covers the API and the database. It is a single process on purpose: every signed-in user's live session is kept in memory, so do not run more than one copy until sessions are routed by user.
@@ -35,6 +35,7 @@ Set these in the API's environment (or a `.env` file next to where it runs). Rea
 | `SCRAPER_DATABASE_URL` | `postgresql://scraper_api:...@host/scraper` |
 | `SCRAPER_API_KEY` | Your Mistral key. It exists only on this host, never in Vercel |
 | `SCRAPER_PROVIDER` | Optional. `mistral` (the default when hosted) or `lmstudio`, to use a model server you run yourself, such as LM Studio or any server with the same API. A local model needs no `SCRAPER_API_KEY`; set `SCRAPER_BASE_URL` to its address (default `http://localhost:1234/v1`). Page text then goes only to that server |
+| `SCRAPER_PROVIDERS` | Optional. Comma-separated model servers people may choose between in the app, besides `SCRAPER_PROVIDER`, such as `lmstudio,mistral`. Each person's choice is saved for them and can change only while nothing is running. Listing `mistral` needs `SCRAPER_API_KEY`; listing `lmstudio` lets everyone who signs in use the server at `SCRAPER_BASE_URL`, so list it only when that is meant. The app tells people when page text goes to a hosted provider. `SCRAPER_ALLOWED_MODELS` applies to every provider |
 | `SCRAPER_JWKS_URL` | `https://<web app>/api/auth/jwks` |
 | `SCRAPER_JWT_ISSUER` | The web app's base URL, exactly as Better Auth issues it |
 | `SCRAPER_JWT_AUDIENCE` | The audience the web app puts in its tokens |
@@ -42,6 +43,11 @@ Set these in the API's environment (or a `.env` file next to where it runs). Rea
 | `SCRAPER_CORS_ORIGINS` | Comma-separated browser origins allowed to call the API, such as `https://app.example.com` |
 | `SCRAPER_CORS_ORIGIN_REGEX` | Optional pattern for preview deployments, such as `https://app-.*\.vercel\.app` |
 | `SCRAPER_ALLOWED_MODELS` | Optional comma-separated model ids people may choose. Set it to keep costs predictable |
+| `SCRAPER_DEBUG` | Defaults to `false`. Writes a local log for review: each fetch (address, mode, status, timing, size, the start of the page text), browser action and the requests it refused, search, tool call, fetch-mode switch, context summary, step limit and run start and end, one JSON line each, in `SCRAPER_DEBUG_DIR` (default `debug-logs`, one file a day, readable by its owner only). Keys, tokens and cookies are never written, but the log **does** hold what people searched for and which pages they read, so it is for the person running the server and should not be left on over other people's data without telling them. The API prints a notice at start-up when it is on. `SCRAPER_DEBUG_BODY_CHARS` (default 500) limits the text each line keeps, and 0 keeps none. The folder is not rotated or deleted for you |
+| `SCRAPER_WEB_SEARCH` | Defaults to `true`. Gives the agent a `web_search` tool that searches the web through Exa's hosted MCP server (`SCRAPER_EXA_URL`, default `https://mcp.exa.ai/mcp`, open to use without a key; `SCRAPER_EXA_API_KEY` is optional and raises its rate limit). **The search words are sent to Exa**, which is a third party; page text is not. Each search costs a page of the page budget and of the person's daily allowance. Results are addresses and snippets: the agent still has to fetch a page to read it, and a site the person did not name asks them for approval first. Set `false` to remove the tool |
+| `SCRAPER_BROWSER` | Defaults to `true`. Lets the agent use a real browser (Playwright, through Scrapling) for four things: `browser_submit_form` (type into a form and press its button), `browser_click` (click a button, link or tab, such as "Load more"), `browser_scroll` (scroll so lazy content loads) and `browser_network` (list the background requests a page makes, such as the JSON behind a list). It works whatever `SCRAPER_FETCH_MODES` allows. It needs browsers installed on the host (`scrapling install`; the container image does not include them, so there it answers that the browser is missing until you add them), and each use opens a fresh browser, so mind the memory limit. The browser may load only public addresses and move only between sites the person named or approved, and every use costs a page of the daily allowance. Each person has a "Use the browser" switch in the app; this setting is the operator's override. Set `false` to remove the tools |
+| `SCRAPER_COMPACT_CONTEXT` | Defaults to `true`. When a run outgrows the model's context window, the model writes notes on the older work (the instruction, the pages fetched, the rows added, the person's answers, what remains) and the last two steps stay word for word. It costs one model call of the daily allowance each time. If the notes cannot be made, or are not enough, it falls back to replacing old tool results with a stub, and a run that still does not fit ends as before. Set `false` to use the stub only |
+| `SCRAPER_FETCH_FALLBACK` | Defaults to `true`. When a page is blocked (HTTP 401, 403 or 429) or comes back nearly empty, `fetch_page` retries it in the more capable modes that `SCRAPER_FETCH_MODES` allows (`fast`, then `dynamic`, then `stealthy`) before giving up, and tells the model which it used. Each attempt uses a page of the page budget and of the daily allowance. With only `fast` allowed there is nothing to retry with. A missing page, a dead address or a timeout is not retried. Set `false` to leave the choice to the model |
 | `SCRAPER_FETCH_MODES` | Defaults to `fast` when hosted. Browser modes need browsers installed and per-user limits first |
 | `SCRAPER_DAILY_MODEL_CALLS`, `SCRAPER_DAILY_PAGES` | Per person per UTC day. Defaults 300 and 300 |
 | `SCRAPER_MAX_CONCURRENT_RUNS` | Streams in flight across everyone. Default 5 |
@@ -96,7 +102,7 @@ Health check: `GET /health` returns `{"ok": true}` with no sign-in.
 
 - **Memory limit.** The API refuses request bodies over 64 KB, but it cannot limit how large a page it downloads for someone. Run the container with a memory limit (for example `podman run --memory 2g`) so one hostile page cannot take the host down.
 
-- **No access log.** The API does not log requests, so page addresses and prompts never reach a log file. It logs failures by exception type only.
+- **Access log.** The API logs one line per request (method, path, status, and the caller's address). Page addresses and prompts travel in request bodies, never in paths, so they do not reach the log; the API itself logs failures by exception type only. Set `SCRAPER_ACCESS_LOG=false` to turn the request lines off.
 - **One process.** Restarting it ends any run that is streaming. The run is saved and the person presses Resume.
 - **Rotating the Mistral key.** Change `SCRAPER_API_KEY` and restart.
 - **Deleting a person.** The web app calls `DELETE /account-data` with `X-Service-Secret`. That removes their session, pages, results, history, runs, preferences, usage counts and agent checkpoints.

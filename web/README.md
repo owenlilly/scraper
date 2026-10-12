@@ -12,7 +12,7 @@ npm run migrate                   # creates the `auth` tables; safe to run again
 npm run dev
 ```
 
-With `EMAIL_TRANSPORT=log`, invitation and confirmation links are printed in the terminal running `npm run dev`.
+With `EMAIL_TRANSPORT=mailpit`, every invitation and confirmation email lands in [Mailpit](https://mailpit.axllent.org)'s inbox. Start it with `make mail` and open http://127.0.0.1:8025. With `EMAIL_TRANSPORT=log` the links are printed in the terminal running `npm run dev` instead.
 
 ## Test it
 

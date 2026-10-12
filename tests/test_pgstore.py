@@ -8,7 +8,7 @@ from scraper.config import Config
 from scraper.models import Message, TraceEntry
 from scraper.store import RunRecord
 from scraper.usage import UsageLimitReached, UsageMeter
-from scraper_api.pgstore import PgSessionStore, PgUsageStore
+from scraper.api.pgstore import PgSessionStore, PgUsageStore
 
 CFG = Config(max_stored_pages=3, max_page_chars=50, max_result_rows=4)
 

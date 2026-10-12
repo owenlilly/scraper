@@ -1,5 +1,5 @@
 /** What the conversation and the run panel show, worked out from the saved state and the turn streaming here. */
-import { describeCall } from "../api/format";
+import { describeCall, plural, readsPage } from "../api/format";
 import type { Pending, TraceEntry, WorkspaceState } from "../api/types";
 import type { LiveTurn } from "./live";
 
@@ -26,7 +26,7 @@ export type RunPanel =
   | { kind: "question"; pending: Pending }
   | { kind: "interrupted"; resumable: boolean; message: string };
 
-const rowsNote = (count: number) => (count > 0 ? `${count} ${count === 1 ? "row" : "rows"} added to the results table` : "");
+const rowsNote = (count: number) => (count > 0 ? `${plural(count, "row")} added to the results table` : "");
 const done = (entry: TraceEntry): TraceLine => ({ ...entry, done: true });
 
 export function deriveThread(state: WorkspaceState, live: LiveTurn | null): ThreadItem[] {
@@ -109,7 +109,7 @@ export function deriveRunPanel(state: WorkspaceState, live: LiveTurn | null): Ru
   }
 
   const run = state.run;
-  if (!run) return { kind: "none" };
+  if (!run) return state.busy ? { kind: "working", step: 0, doing: "Working" } : { kind: "none" };
   switch (run.status) {
     case "running":
       return state.busy
@@ -130,12 +130,11 @@ export function isWorking(state: WorkspaceState, live: LiveTurn | null): boolean
   return live ? live.status === "streaming" : state.busy;
 }
 
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /** "Worked for 7 steps, read 3 pages": the line above a collapsed work log. */
 export function summarizeWork(trace: TraceLine[]): string {
   if (trace.length === 0) return "";
-  const read = trace.filter((line) => line.name === "fetch_page" && line.ok).length;
+  const read = trace.filter((line) => readsPage(line.name) && line.ok).length;
   return `Worked for ${plural(trace.length, "step")}${read > 0 ? `, read ${plural(read, "page")}` : ""}`;
 }
 

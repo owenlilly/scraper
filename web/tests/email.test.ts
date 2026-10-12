@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { EmailError, inviteMessage, logSender, resendSender, resetMessage, verifyMessage } from "../src/lib/email";
+import { EmailError, inviteMessage, logSender, mailpitSender, resendSender, resetMessage, verifyMessage } from "../src/lib/email";
 
 const MESSAGE = { to: "a@x.test", subject: "Hi", text: "plain", html: "<p>rich</p>" };
 
@@ -34,6 +34,38 @@ describe("resendSender", () => {
   it("gives up after the timeout", async () => {
     const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))));
     await expect(resendSender({ apiKey: "k", from: "f", fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20 })(MESSAGE)).rejects.toMatchObject({ status: 0 });
+  });
+});
+
+describe("mailpitSender", () => {
+  it("posts the message to Mailpit's send API with the sender split into name and address", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    await mailpitSender({ url: "http://127.0.0.1:8025", from: "Page Chat <no-reply@localhost>", fetchImpl })(MESSAGE);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:8025/api/v1/send");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      From: { Email: "no-reply@localhost", Name: "Page Chat" },
+      To: [{ Email: "a@x.test" }],
+      Subject: "Hi",
+      Text: "plain",
+      HTML: "<p>rich</p>",
+    });
+  });
+
+  it("accepts a bare sender address", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    await mailpitSender({ url: "http://m.test", from: "no-reply@localhost", fetchImpl })(MESSAGE);
+    expect(JSON.parse(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)).From).toEqual({ Email: "no-reply@localhost" });
+  });
+
+  it("reports the status when Mailpit refuses, and status 0 when it is not running", async () => {
+    const refuses = vi.fn(async () => new Response("no", { status: 400 }));
+    await expect(mailpitSender({ url: "http://m.test", from: "f@x.test", fetchImpl: refuses })(MESSAGE)).rejects.toMatchObject({ status: 400 });
+    const down = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(mailpitSender({ url: "http://m.test", from: "f@x.test", fetchImpl: down })(MESSAGE)).rejects.toMatchObject({ status: 0 });
   });
 });
 

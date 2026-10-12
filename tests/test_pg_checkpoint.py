@@ -3,9 +3,9 @@ from contextlib import AsyncExitStack
 from fakes import FakeLLM, ScriptedChat, ai, call, make_fetch, make_page
 from scraper.config import Config
 from scraper.usage import MemoryUsageStore
-from scraper_api.accounts import delete_user_data
-from scraper_api.db import open_checkpointer
-from scraper_api.registry import SessionRegistry
+from scraper.api.accounts import delete_user_data
+from scraper.api.db import open_checkpointer
+from scraper.api.registry import SessionRegistry
 
 A = "https://site.test/a"
 CFG = Config(hosted=True, request_delay=0.0)

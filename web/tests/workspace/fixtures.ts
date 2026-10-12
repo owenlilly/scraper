@@ -31,6 +31,7 @@ export const makeRun = (fields: Partial<RunView> = {}): RunView => ({
 export const makeState = (fields: Partial<WorkspaceState> = {}): WorkspaceState => ({
   user: { id: "u1" },
   provider: { key: "lmstudio", name: "LM Studio", hosted: false },
+  providers: [{ key: "lmstudio", name: "LM Studio", hosted: false }],
   busy: false,
   pages: [],
   failed: [],
@@ -38,11 +39,12 @@ export const makeState = (fields: Partial<WorkspaceState> = {}): WorkspaceState 
   history: [],
   run: null,
   progress: [0, 0],
-  settings: { url: "", mode: "", follow: "", depth: "", agent: "" },
+  settings: { url: "", mode: "", follow: "", depth: "", agent: "", browser: "" },
   model: null,
   models: [{ id: "fake-model", context: 32768, loaded: true }],
   models_error: null,
   fetch_modes: ["fast"],
+  browser_available: true,
   usage,
   ...fields,
 });

@@ -23,15 +23,17 @@ from .registry import RateLimiter, RunSlots, SessionRegistry
 from .routes import router as state_router
 from .streams import router as stream_router
 
-log = logging.getLogger("scraper_api")
+log = logging.getLogger("scraper.api")
 EVICT_EVERY_SECONDS = 60
 
 
-def make_llm(cfg: Config):
-    """The model server this deployment uses: Mistral's API by default, or an LM Studio compatible server you run yourself."""
-    if cfg.provider == "lmstudio":
-        return LMStudio(cfg.base_url, fallback_context=cfg.fallback_context)
-    return MistralAPI(cfg.mistral_base_url, cfg.api_key, fallback_context=cfg.fallback_context)
+def make_llms(cfg: Config) -> dict:
+    """Every provider people may choose between, the deployment's default first."""
+    clients = {
+        "lmstudio": lambda: LMStudio(cfg.base_url, fallback_context=cfg.fallback_context),
+        "mistral": lambda: MistralAPI(cfg.mistral_base_url, cfg.api_key, fallback_context=cfg.fallback_context),
+    }
+    return {key: clients[key]() for key in cfg.available_providers}
 
 
 async def build_deps(cfg: Config, stack: AsyncExitStack) -> Deps:
@@ -39,17 +41,16 @@ async def build_deps(cfg: Config, stack: AsyncExitStack) -> Deps:
     stack.callback(pool.close)
     migrate(pool)
     checkpointer = await open_checkpointer(cfg.database_url, stack)
-    llm = make_llm(cfg)
+    llms = make_llms(cfg)
     usage: UsageStore = PgUsageStore(pool)
     return Deps(
         cfg=cfg,
         verifier=JWKSVerifier(cfg.jwks_url, cfg.jwt_issuer, cfg.jwt_audience),
-        registry=SessionRegistry(cfg, pool=pool, checkpointer=checkpointer, llm=llm, usage_store=usage),
+        registry=SessionRegistry(cfg, pool=pool, checkpointer=checkpointer, llm=llms[cfg.provider], llms=llms, usage_store=usage),
         slots=RunSlots(cfg.max_concurrent_runs),
         limiter=RateLimiter(cfg.requests_per_minute),
-        catalog=ModelCatalog(llm, cfg.allowed_model_list),
+        catalogs={key: ModelCatalog(client, cfg.allowed_model_list) for key, client in llms.items()},
         pool=pool,
-        checkpointer=checkpointer,
     )
 
 

@@ -1,4 +1,7 @@
 import { parseSse, type SseFrame } from "./sse";
+import type { TokenCache } from "./token";
+
+const SERVER_PROBLEM = "The server had a problem. Try again in a moment.";
 
 export class ApiError extends Error {
   constructor(
@@ -12,7 +15,6 @@ export class ApiError extends Error {
   }
 }
 
-type Tokens = { get(): Promise<string>; invalidate(): void };
 type Send = { method: string; body?: unknown; accept?: string; signal?: AbortSignal };
 
 export type ApiClient = {
@@ -33,10 +35,10 @@ async function toError(response: Response): Promise<ApiError> {
   } catch {
     // not JSON: fall through, and never show whatever it was
   }
-  return new ApiError(response.status, "server_error", "The server had a problem. Try again in a moment.");
+  return new ApiError(response.status, "server_error", SERVER_PROBLEM);
 }
 
-export function createApiClient(options: { baseUrl: string; tokens: Tokens; fetchImpl?: typeof fetch }): ApiClient {
+export function createApiClient(options: { baseUrl: string; tokens: TokenCache; fetchImpl?: typeof fetch }): ApiClient {
   const { baseUrl, tokens, fetchImpl = fetch } = options;
 
   async function send(path: string, { method, body, accept, signal }: Send): Promise<Response> {
@@ -71,7 +73,7 @@ export function createApiClient(options: { baseUrl: string; tokens: Tokens; fetc
     put: async (path, body) => json(await send(path, { method: "PUT", body })),
     async *stream(path, body, signal) {
       const response = await send(path, { method: "POST", body, accept: "text/event-stream", signal });
-      if (!response.body) throw new ApiError(response.status, "server_error", "The server had a problem. Try again in a moment.");
+      if (!response.body) throw new ApiError(response.status, "server_error", SERVER_PROBLEM);
       yield* parseSse(response.body);
     },
     download: async (path) => (await send(path, { method: "GET" })).blob(),

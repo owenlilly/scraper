@@ -1,7 +1,7 @@
 /** The turn that is streaming into this screen, built from the events of one request. */
-import type { EndFrame, Pending, RunView, Usage } from "../api/types";
+import type { EndFrame, Pending, RunView, TraceEntry, Usage } from "../api/types";
 
-export type LogEntry = { id: number; name: string; args: Record<string, unknown>; text: string; ok: boolean; done: boolean };
+export type LogEntry = TraceEntry & { id: number; done: boolean };
 export type QueuedMessage = { id: string; text: string };
 export type LiveStatus = "streaming" | "paused" | "done" | "stopped" | "error";
 

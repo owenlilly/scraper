@@ -12,7 +12,7 @@ from psycopg_pool import ConnectionPool
 
 from scraper import fetch as fetch_mod
 from scraper.config import Config
-from scraper.hosted import make_hosted_fetch
+from scraper.hosted import make_hosted_browser, make_hosted_fetch, make_hosted_search
 from scraper.netguard import check_public_url
 from scraper.session import Session
 from scraper.usage import UsageMeter, UsageStore
@@ -89,6 +89,7 @@ class SessionRegistry:
         checkpointer,
         llm,
         usage_store: UsageStore,
+        llms: dict | None = None,
         idle_seconds: float = 1800.0,
         clock: Callable[[], float] = time.monotonic,
         fetch_base: Callable[..., fetch_mod.Page] = fetch_mod.fetch,
@@ -99,6 +100,7 @@ class SessionRegistry:
         self.pool = pool
         self.checkpointer = checkpointer
         self.llm = llm
+        self.llms = dict(llms) if llms else {llm.key: llm}
         self.usage_store = usage_store
         self.idle_seconds = idle_seconds
         self._clock = clock
@@ -122,16 +124,21 @@ class SessionRegistry:
 
     async def _create(self, user_id: str) -> Entry:
         meter = UsageMeter(user_id, self.usage_store, self.cfg)
+        store = PgSessionStore(self.pool, user_id, self.cfg)
+        saved = store.get_pref("provider")  # the one this person chose last time, if it is still offered
         session = Session(
             self.cfg,
-            self.llm,
+            self.llms.get(saved, self.llm),
             make_hosted_fetch(self.cfg, meter, base=self._fetch_base, check=self._url_check),
-            store=PgSessionStore(self.pool, user_id, self.cfg),
+            browser=make_hosted_browser(self.cfg, meter, check=self._url_check),
+            search=make_hosted_search(self.cfg, meter),
+            store=store,
             checkpointer=self.checkpointer,
-            providers={self.llm.key: self.llm},
+            providers=self.llms,
             usage=meter,
             model_factory=self._model_factory,
         )
+        session.debug_user = user_id
         await session.restore()
         return Entry(user_id, session, meter, self._clock())
 

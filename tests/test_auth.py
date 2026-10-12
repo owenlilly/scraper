@@ -4,7 +4,7 @@ import jwt
 import pytest
 
 from jwks_support import AUDIENCE, ISSUER, JWKSServer, Signer
-from scraper_api.auth import AuthError, AuthUnavailable, JWKSVerifier
+from scraper.api.auth import AuthError, AuthUnavailable, JWKSVerifier
 
 
 @pytest.fixture

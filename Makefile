@@ -1,6 +1,7 @@
 # Common tasks. Run `make` to list them. Containers use Podman.
 .DEFAULT_GOAL := help
-.PHONY: help install api web migrate test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
+MAIL_NAME ?= scraper-mailpit
+.PHONY: debug-log help install api web mail mail-stop migrate test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
 
 # Scratch databases for the tests. `make test-db` starts a Postgres that has all three. Override any of these to use your own;
 # each database's schemas are dropped and recreated, so never point them at data you want to keep.
@@ -18,10 +19,16 @@ install: ## Install the Python and web dependencies
 	cd web && npm ci
 
 api: ## Run the Python API (reads .env in this directory)
-	uv run python -m scraper_api
+	uv run python -m scraper
 
 web: ## Run the web app in development mode (reads web/.env.local)
 	cd web && npm run dev
+
+mail: ## Start Mailpit, the development email inbox, in Podman at http://127.0.0.1:8025
+	podman run -d --name $(MAIL_NAME) -p 127.0.0.1:8025:8025 docker.io/axllent/mailpit
+
+mail-stop: ## Remove the Mailpit container
+	podman rm -f $(MAIL_NAME)
 
 migrate: ## Create or update the web app's tables in the auth schema
 	cd web && npm run migrate
@@ -52,6 +59,10 @@ test-db: ## Start a throwaway Postgres in Podman on port 55432 with the three sc
 
 test-db-stop: ## Remove the throwaway Postgres
 	podman rm -f $(TEST_DB_NAME)
+
+debug-log: ## Show the most recent debug log lines (needs SCRAPER_DEBUG=true), newest last
+	@ls debug-logs/debug-*.jsonl >/dev/null 2>&1 || { echo "No debug log yet. Set SCRAPER_DEBUG=true in .env and restart the API."; exit 1; }
+	@tail -n 60 $$(ls -t debug-logs/debug-*.jsonl | head -1)
 
 up: ## Start Postgres and the API in containers (needs POSTGRES_PASSWORD and the hosted settings in .env)
 	podman-compose up --build -d

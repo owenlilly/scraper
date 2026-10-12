@@ -173,8 +173,8 @@ async def test_deleting_an_account_in_the_middle_of_a_run_leaves_nothing_behind(
     import threading
 
     from fakes import ai, call
-    from scraper_api.db import USER_TABLES
-    from scraper_api.streams import stream_response
+    from scraper.api.db import USER_TABLES
+    from scraper.api.streams import stream_response
 
     started, release = threading.Event(), threading.Event()
     api.before_fetch = lambda url: (started.set(), release.wait(10))
@@ -201,7 +201,7 @@ async def test_deleting_an_account_in_the_middle_of_a_run_leaves_nothing_behind(
 
 
 async def test_deletion_says_to_try_again_when_a_run_will_not_stop(api, monkeypatch):
-    import scraper_api.routes as routes
+    import scraper.api.routes as routes
 
     monkeypatch.setattr(routes, "DELETE_WAIT_SECONDS", 0.2)
     await seed_page(api)

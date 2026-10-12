@@ -245,3 +245,20 @@ def test_fast_mode_passes_safe_redirects_and_a_redirect_cap_explicitly(monkeypat
     _fast("https://example.test/", 5.0)
     assert seen["follow_redirects"] == "safe"
     assert seen["max_redirects"] == 5
+
+
+def test_a_json_response_is_shown_as_formatted_json_so_an_api_can_be_read():
+    from types import SimpleNamespace
+
+    body = '{"items":[{"name":"Starter","price":10}],"next":null}'
+    response = SimpleNamespace(status=200, headers={"Content-Type": "application/json; charset=utf-8"}, url="https://site.test/api/items", html_content=body, body=body.encode())
+    page = fetch("https://site.test/api/items", "fast", backends={"fast": lambda url, timeout: response})
+    assert page.markdown.startswith("```json") and '"name": "Starter"' in page.markdown and page.url == "https://site.test/api/items"
+    assert page.title == "https://site.test/api/items" and not page.looks_empty
+
+
+def test_json_that_is_not_valid_json_is_shown_as_it_came():
+    from types import SimpleNamespace
+
+    response = SimpleNamespace(status=200, headers={"content-type": "application/json"}, url="https://site.test/x", html_content="{oops", body=b"{oops")
+    assert "{oops" in fetch("https://site.test/x", "fast", backends={"fast": lambda url, timeout: response}).markdown

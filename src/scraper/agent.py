@@ -12,9 +12,10 @@ import openai
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
-from .guards import FOLLOWUP_KEY, ContextTrim, FollowupInbox, RunGuard, UsageGuard
+from .guards import FOLLOWUP_KEY, ContextCompact, ContextTrim, FollowupInbox, RunGuard, UsageGuard
 from .usage import UsageLimitReached
 
 
@@ -55,8 +56,11 @@ async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSav
         return saver
 
 
-def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None, on_present=None, usage_charge=None):
-    middleware = [ContextTrim(max_context_tokens), RunGuard(max_steps=max_steps, on_grant=on_grant)]
+def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None, on_present=None, usage_charge=None, compact=False):
+    # With compaction the model summarises the older part of a long run (and the summary is charged like any model call); without it, old
+    # tool results are replaced by a stub.
+    trimmer = ContextCompact(max_context_tokens, model, usage_charge) if compact else ContextTrim(max_context_tokens)
+    middleware = [trimmer, RunGuard(max_steps=max_steps, on_grant=on_grant)]
     if usage_charge is not None:
         middleware.insert(0, UsageGuard(usage_charge))  # first: a run paused inside RunGuard must not be charged again when it resumes
     if followups is not None:
@@ -79,6 +83,8 @@ def _plain(content) -> str:
 def describe_error(exc: Exception, base_url: str, provider: str = "LM Studio") -> str:
     if isinstance(exc, UsageLimitReached):
         return str(exc)
+    if isinstance(exc, GraphRecursionError):
+        return "The run went on for longer than the system allows in one go. Your work so far is saved: press Resume to carry on."
     if isinstance(exc, openai.APIStatusError):
         if exc.status_code in (401, 403):
             return f"{provider} rejected the API key. Check SCRAPER_API_KEY."
@@ -93,7 +99,10 @@ class AgentRunner:
         self.agent = agent
         self.base_url = base_url
         self.provider = provider
-        self.recursion_limit = max_steps * 4 + 25
+        # LangGraph counts every node the graph runs, not every model step. One step passes through each middleware hook, the model and the
+        # tools, so a run's own step limit (RunGuard asks the person at max_steps) must come well before this one.
+        nodes = [name for name in getattr(agent, "nodes", {}) if not name.startswith("__")]
+        self.recursion_limit = (max_steps + 2) * max(4, len(nodes)) + 25
 
     def _config(self, thread_id: str) -> dict:
         return {"configurable": {"thread_id": thread_id}, "recursion_limit": self.recursion_limit}

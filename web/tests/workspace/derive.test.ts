@@ -74,8 +74,12 @@ describe("deriveThread", () => {
 });
 
 describe("deriveRunPanel", () => {
-  it("is nothing when there is no run", () => {
+  it("is nothing when there is no run and the server is idle", () => {
     expect(deriveRunPanel(makeState(), null)).toEqual({ kind: "none" });
+  });
+
+  it("offers a way to stop even when the server is busy with something that is not a saved run", () => {
+    expect(deriveRunPanel(makeState({ busy: true, run: null }), null)).toEqual({ kind: "working", step: 0, doing: "Working" });
   });
 
   it("describes the call being made while a run streams", () => {
@@ -139,6 +143,11 @@ describe("summarizeWork", () => {
   });
   it("does not count a page that could not be fetched as read", () => {
     expect(summarizeWork([line("fetch_page"), line("fetch_page", false)])).toBe("Worked for 2 steps, read 1 page");
+  });
+  it("counts the page a browser tool came back with as a page read, but not a list of network requests", () => {
+    expect(summarizeWork([line("fetch_page"), line("browser_submit_form"), line("browser_click"), line("browser_scroll"), line("browser_network")])).toBe(
+      "Worked for 5 steps, read 4 pages",
+    );
   });
   it("leaves out the pages when none were read, and says step for one", () => {
     expect(summarizeWork([line("add_rows")])).toBe("Worked for 1 step");

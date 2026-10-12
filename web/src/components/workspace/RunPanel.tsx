@@ -1,13 +1,14 @@
 "use client";
 
 import { useId, useState } from "react";
-import type { LimitPending, Pending } from "../../lib/api/types";
+import { plural } from "../../lib/api/format";
+import type { AskPending, LimitPending, Pending } from "../../lib/api/types";
 import type { RunPanel as Panel } from "../../lib/workspace/derive";
 
 type Answer = string | { action?: string; note?: string; allow?: boolean };
 type Handlers = { onAnswer: (value: Answer) => void; onDiscard: () => void };
 
-function AskCard({ pending, onAnswer }: { pending: Extract<Pending, { kind: "ask" }>; onAnswer: (value: Answer) => void }) {
+function AskCard({ pending, onAnswer }: { pending: AskPending; onAnswer: (value: Answer) => void }) {
   const [text, setText] = useState("");
   const inputId = useId();
   return (
@@ -106,7 +107,7 @@ export function RunPanel({ panel, pagesRead, onStop, onResume, onAnswer, onDisca
         </div>
         <span className="muted small">
           {panel.step > 0 ? `Step ${panel.step}` : "Starting"}
-          {pagesRead > 0 ? `, ${pagesRead} ${pagesRead === 1 ? "page" : "pages"} read` : ""}
+          {pagesRead > 0 ? `, ${plural(pagesRead, "page")} read` : ""}
         </span>
       </div>
     );

@@ -35,6 +35,18 @@ export function Ledger({ rows }: { rows: Record<string, unknown>[] }) {
           ))}
         </tbody>
       </table>
+      <div className="ledger-fill" aria-hidden="true" />
+    </div>
+  );
+}
+
+/** Before the first row: the blank ruled sheet, so the pane already looks like the table it will become. */
+export function LedgerEmpty() {
+  return (
+    <div className="ledger-scroll">
+      <div className="ledger-ghost" aria-hidden="true" />
+      <p className="ledger-empty">Rows the agent collects appear here as a table you can download.</p>
+      <div className="ledger-fill" aria-hidden="true" />
     </div>
   );
 }
