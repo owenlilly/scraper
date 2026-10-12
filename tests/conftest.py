@@ -33,6 +33,24 @@ def pg(pg_pool):
 
 
 @pytest.fixture
+def pipeline(pg_pool):
+    """The migrated pool with every pipeline table emptied."""
+    from scraper.pipeline.schema import TABLE_NAMES, migrate
+
+    migrate(pg_pool)
+    with pg_pool.connection() as conn:
+        conn.execute("TRUNCATE " + ", ".join(f"pipeline.{name}" for name in TABLE_NAMES) + " RESTART IDENTITY")
+    return pg_pool
+
+
+@pytest.fixture
+def blobs(tmp_path):
+    from scraper.pipeline.blobs import FilesystemBlobStore
+
+    return FilesystemBlobStore(tmp_path / "blobs")
+
+
+@pytest.fixture
 async def api(pg):
     from api_support import Harness
 
