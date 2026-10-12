@@ -11,6 +11,8 @@ Page Chat is a hosted, invite-only service. An administrator invites people by e
 - **Talk to it while it works.** Send a note ("skip the blog pages", "also grab the SKU") and the agent reads it before its next step, keeping what it has gathered. The note shows as waiting until it is read. Press Stop and anything unread goes back into the box.
 - **Nothing is lost.** Your session (pages, results, conversation) and any paused, stopped or interrupted run are saved. Close the tab, come back, and press Resume or answer the question that was waiting.
 - **Results you can use.** Collected rows appear in a table, in the column order the agent chose, with CSV and JSON download.
+- **Web search.** When you haven't given an address, the agent can search the web (through Exa) for pages to read. The search words go to Exa; the agent still asks you before it opens a site you did not name. Switch it off with `SCRAPER_WEB_SEARCH=false`.
+- **A real browser when a page needs one.** The agent can fill in a search box or another form, click a button or link ("Load more", tabs), scroll to load lazy content, and list the background requests a page makes (to find the JSON behind it), in a headless browser. Each action opens the page fresh and returns what it sees; the agent cannot run arbitrary browser code. Switch it off per person with "Use the browser" in the composer, or for everyone with `SCRAPER_BROWSER=false`; it needs the browsers installed (`uv run scrapling install`).
 - **Ask about the pages.** Switch to "Ask about the pages" to read a page yourself and ask questions about it, with no tools. Use this for models without tool calling.
 
 ## How it is built
@@ -18,7 +20,7 @@ Page Chat is a hosted, invite-only service. An administrator invites people by e
 | Part | Where | Does |
 |---|---|---|
 | Web app | `web/` (Next.js, Better Auth) | The screens, accounts, email confirmation, invitations, and the short-lived tokens the browser sends to the API |
-| API | `src/scraper_api/` (FastAPI) | One live session per signed-in person, runs streamed to the browser as server-sent events, daily limits |
+| API | `src/scraper/api/` (FastAPI) | One live session per signed-in person, runs streamed to the browser as server-sent events, daily limits |
 | Agent library | `src/scraper/` | The agent, its tools, fetching, the guards against reaching private networks, the model clients |
 | Database | Postgres | A schema `auth` for the web app and a schema `app` for the API, so the API cannot read password hashes |
 
@@ -34,7 +36,7 @@ You need [uv](https://docs.astral.sh/uv/) with Python 3.14, Node 20.9 or later, 
    SCRAPER_DATABASE_URL=postgresql://user@localhost/scraper \
    SCRAPER_JWKS_URL=http://localhost:3000/api/auth/jwks SCRAPER_JWT_ISSUER=http://localhost:3000 SCRAPER_JWT_AUDIENCE=http://localhost:8080 \
    SCRAPER_SERVICE_SECRET=<a long random string> SCRAPER_CORS_ORIGINS=http://localhost:3000 \
-   uv run python -m scraper_api
+   uv run python -m scraper
    ```
 
 3. Start the web app, with the matching settings in `web/.env.local` (copy `web/.env.example`; the table in [docs/hosted-deploy.md](docs/hosted-deploy.md) lists which setting pairs with which):
@@ -43,7 +45,7 @@ You need [uv](https://docs.astral.sh/uv/) with Python 3.14, Node 20.9 or later, 
    cd web && npm install && npm run migrate && npm run dev
    ```
 
-   With `EMAIL_TRANSPORT=log` (the development default) invitation and confirmation links are printed in the terminal running `npm run dev`.
+   For development set `EMAIL_TRANSPORT=mailpit` and run `make mail`: every invitation and confirmation email lands in the Mailpit inbox at http://127.0.0.1:8025. With `EMAIL_TRANSPORT=log` (the default when nothing is set) the links are printed in the terminal running `npm run dev` instead.
 4. Open http://localhost:3000 and sign up with the address in `ADMIN_EMAIL`. That first account is the administrator and needs no invitation; everyone after it does.
 
 `compose.yaml` runs Postgres and the API in containers (`podman-compose up --build`); the web app runs separately.
@@ -62,8 +64,8 @@ The agent may fetch only sites you named in the instruction, the "Start from" ad
 
 ## Privacy and safety
 
-- **With the hosted Mistral provider, the text of every page the model reads is sent to Mistral.** With a local model server, it goes only to that server. The API turns LangSmith and other cloud tracing off at start-up.
-- Page text and prompts are never written to a log.
+- **With the hosted Mistral provider, the text of every page the model reads is sent to Mistral.** With a local model server, it goes only to that server. **Web search sends the search words to Exa** (`SCRAPER_WEB_SEARCH=false` removes it). The API turns LangSmith and other cloud tracing off at start-up.
+- Page text and prompts are never written to a log, unless the person running the server turns on debug mode (`SCRAPER_DEBUG=true`), which writes a local, owner-readable review log (see `docs/hosted-deploy.md`).
 - The API refuses addresses on private networks, and the host must also block them at the network level: see [docs/hosted-deploy.md](docs/hosted-deploy.md), section 3.
 - Scraped pages are untrusted: the agent is told never to follow instructions found inside them, and its allowlist and step budgets limit what a hostile page could make it do. That reduces the risk of prompt injection but does not remove it.
 - The agent's answers are shown as formatted text only: no images, no scripts, and only ordinary links.

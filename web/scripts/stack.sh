@@ -43,13 +43,14 @@ stack_up() {
   local provider_env
   if [ "${STACK_PROVIDER:-mistral}" = lmstudio ]; then
     FAKE_MODEL_PORT="$MODEL_PORT" npx tsx e2e/support/fake-model-main.ts > "$LOGS/model.log" 2>&1 &
-    provider_env="SCRAPER_PROVIDER=lmstudio SCRAPER_BASE_URL=$MODEL_URL/v1"
+    # Mistral is offered too, so the provider picker has something to pick; its address goes nowhere, so nothing can be sent.
+    provider_env="SCRAPER_PROVIDER=lmstudio SCRAPER_BASE_URL=$MODEL_URL/v1 SCRAPER_PROVIDERS=lmstudio,mistral SCRAPER_API_KEY=not-a-real-key SCRAPER_MISTRAL_BASE_URL=http://127.0.0.1:1/v1"
   else
     provider_env="SCRAPER_API_KEY=not-a-real-key SCRAPER_MISTRAL_BASE_URL=http://127.0.0.1:1/v1"
   fi
   (cd "$LOGS" && exec env $provider_env SCRAPER_HOSTED=true SCRAPER_DATABASE_URL="$E2E_DATABASE_URL" SCRAPER_JWKS_URL="$WEB_URL/api/auth/jwks" \
     SCRAPER_JWT_ISSUER="$WEB_URL" SCRAPER_JWT_AUDIENCE="$API_URL" SCRAPER_SERVICE_SECRET="$SECRET" SCRAPER_CORS_ORIGINS="$WEB_URL" \
-    SCRAPER_HOST=127.0.0.1 SCRAPER_PORT="$API_PORT" uv run --project "$ROOT" python -m scraper_api > "$LOGS/api.log" 2>&1) &
+    SCRAPER_HOST=127.0.0.1 SCRAPER_PORT="$API_PORT" uv run --project "$ROOT" python -m scraper > "$LOGS/api.log" 2>&1) &
 
   local urls=("$WEB_URL/" "$API_URL/health")
   [ "${STACK_PROVIDER:-mistral}" = lmstudio ] && urls+=("$MODEL_URL/v1/models")

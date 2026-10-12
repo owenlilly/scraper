@@ -1,7 +1,8 @@
 "use client";
 
+import { plural } from "../../lib/api/format";
 import type { WorkspaceState } from "../../lib/api/types";
-import { Ledger } from "./Ledger";
+import { Ledger, LedgerEmpty } from "./Ledger";
 import { PagesList } from "./PagesList";
 
 export function ResultsPane({ state, onDownload }: { state: WorkspaceState; onDownload: (kind: "csv" | "json") => void }) {
@@ -10,15 +11,17 @@ export function ResultsPane({ state, onDownload }: { state: WorkspaceState; onDo
     <div className="pane results">
       <div className="ledger-head">
         <h2>Results</h2>
-        <span className="count">{count === 1 ? "1 row" : `${count} rows`}</span>
-        <button className="btn btn-small" type="button" disabled={count === 0} onClick={() => onDownload("csv")}>
-          Download CSV
-        </button>
-        <button className="btn btn-small" type="button" disabled={count === 0} onClick={() => onDownload("json")}>
-          Download JSON
-        </button>
+        <span className="count">{plural(count, "row")}</span>
+        <div className="btn-group">
+          <button className="btn btn-small" type="button" disabled={count === 0} onClick={() => onDownload("csv")}>
+            Download CSV
+          </button>
+          <button className="btn btn-small" type="button" disabled={count === 0} onClick={() => onDownload("json")}>
+            Download JSON
+          </button>
+        </div>
       </div>
-      {count > 0 ? <Ledger rows={state.rows} /> : <p className="ledger-empty">Rows the agent collects appear here as a table you can download.</p>}
+      {count > 0 ? <Ledger rows={state.rows} /> : <LedgerEmpty />}
       <PagesList pages={state.pages} failed={state.failed} />
     </div>
   );

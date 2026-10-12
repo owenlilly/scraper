@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { authClient } from "../../lib/auth-client";
 import { formatDay, inviteStatusLabel, personStatus, roleLabel } from "../../lib/admin-view";
 import type { InviteStatus } from "../../lib/invites";
 import { Dialog } from "../Dialog";
+import { Toast, useToast } from "../Toast";
 import "./admin.css";
 
 export type InviteRow = { id: string; email: string; status: InviteStatus; createdAt: string };
@@ -25,14 +26,8 @@ export function AdminPanel({ invites, people, selfId }: { invites: InviteRow[]; 
   const [email, setEmail] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useToast();
   const [removing, setRemoving] = useState<PersonRow | null>(null);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 3200);
-    return () => clearTimeout(timer);
-  }, [toast]);
 
   async function act(work: () => Promise<string | null>, done: string) {
     setBusy(true);
@@ -226,11 +221,7 @@ export function AdminPanel({ invites, people, selfId }: { invites: InviteRow[]; 
         </p>
       </Dialog>
 
-      {toast ? (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      ) : null}
+      <Toast message={toast} />
     </div>
   );
 }

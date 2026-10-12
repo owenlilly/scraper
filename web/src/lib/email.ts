@@ -1,4 +1,4 @@
-/** Sending email. One function type, so Resend can be swapped for anything else by writing another sender. */
+/** Sending email. One function type, so Resend or Mailpit can be swapped for anything else by writing another sender. */
 
 export type EmailMessage = { to: string; subject: string; text: string; html: string };
 export type EmailSender = (message: EmailMessage) => Promise<void>;
@@ -11,22 +11,42 @@ export class EmailError extends Error {
 
 const RESEND_URL = "https://api.resend.com/emails";
 
+/** Split `Name <a@b.test>` into its parts; a bare address has no name. */
+function parseAddress(value: string): { Email: string; Name?: string } {
+  const match = /^\s*(.*?)\s*<([^<>]+)>\s*$/.exec(value);
+  return match ? { Email: match[2].trim(), ...(match[1] ? { Name: match[1].replace(/^"|"$/g, "") } : {}) } : { Email: value.trim() };
+}
+
+/** POST a JSON body with a time limit. Any failure to get an answer, or any answer that is not a success, becomes an EmailError. */
+async function postJson(fetchImpl: typeof fetch, url: string, headers: Record<string, string>, body: unknown, timeoutMs: number): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    throw new EmailError(0); // could not reach the service, or it took too long
+  }
+  if (!response.ok) throw new EmailError(response.status);
+}
+
 export function resendSender(options: { apiKey: string; from: string; fetchImpl?: typeof fetch; timeoutMs?: number }): EmailSender {
   const { apiKey, from, fetchImpl = fetch, timeoutMs = 10_000 } = options;
-  return async (message) => {
-    let response: Response;
-    try {
-      response = await fetchImpl(RESEND_URL, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text, html: message.html }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch {
-      throw new EmailError(0); // could not reach the service, or it took too long
-    }
-    if (!response.ok) throw new EmailError(response.status);
-  };
+  return (message) =>
+    postJson(fetchImpl, RESEND_URL, { authorization: `Bearer ${apiKey}` }, { from, to: [message.to], subject: message.subject, text: message.text, html: message.html }, timeoutMs);
+}
+
+/**
+ * Development only: hand the message to Mailpit (https://mailpit.axllent.org), which keeps it in a web inbox and sends nothing
+ * on. Uses Mailpit's HTTP API, so no mail library is needed. `url` is Mailpit's web address, port 8025 by default.
+ */
+export function mailpitSender(options: { url: string; from: string; fetchImpl?: typeof fetch; timeoutMs?: number }): EmailSender {
+  const { url, from, fetchImpl = fetch, timeoutMs = 5_000 } = options;
+  return (message) =>
+    postJson(fetchImpl, `${url}/api/v1/send`, {}, { From: parseAddress(from), To: [{ Email: message.to }], Subject: message.subject, Text: message.text, HTML: message.html }, timeoutMs);
 }
 
 /** Development only: print the message instead of sending it, so a sign-up can be tried without a Resend account. */

@@ -44,7 +44,10 @@ export function AccountMenu({ person, usage, onDelete }: { person: Person; usage
 
   return (
     <div className="menu" ref={root}>
-      <button className="btn" type="button" aria-label="Account menu" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((value) => !value)}>
+      <button className="btn account" type="button" aria-label="Account menu" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((value) => !value)}>
+        <span className="initial" aria-hidden="true">
+          {(person.name || person.email).trim().charAt(0).toUpperCase()}
+        </span>
         {person.name.split(" ")[0] || person.email}
       </button>
       {open ? (

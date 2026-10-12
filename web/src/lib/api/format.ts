@@ -11,13 +11,27 @@ export function hostAndPath(url: string): string {
   }
 }
 
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+/** Tools whose result is a page the agent has now read. */
+const PAGE_TOOLS = new Set(["fetch_page", "browser_submit_form", "browser_click", "browser_scroll"]);
+export const readsPage = (name: string): boolean => PAGE_TOOLS.has(name);
+
+export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 export function describeCall(name: string, args: Record<string, unknown>): string {
   const url = typeof args.url === "string" && args.url ? hostAndPath(args.url) : null;
   switch (name) {
     case "fetch_page":
       return url ? `Fetching ${url}${typeof args.mode === "string" && args.mode ? ` in ${args.mode} mode` : ""}` : "Fetching a page";
+    case "web_search":
+      return typeof args.query === "string" && args.query ? `Searching the web for "${args.query.length > 80 ? `${args.query.slice(0, 80)}…` : args.query}"` : "Searching the web";
+    case "browser_submit_form":
+      return url ? `Submitting a form on ${url}` : "Submitting a form";
+    case "browser_click":
+      return typeof args.click === "string" && args.click ? `Clicking "${args.click}" on ${url ?? "a page"}` : "Clicking on a page";
+    case "browser_scroll":
+      return url ? `Scrolling ${url}` : "Scrolling a page";
+    case "browser_network":
+      return `Watching the network requests of ${url ?? "a page"}`;
     case "list_links":
       return `Listing the links on ${url ?? "a page"}`;
     case "read_page":

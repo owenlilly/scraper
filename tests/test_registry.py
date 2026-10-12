@@ -5,7 +5,7 @@ import pytest
 from fakes import FakeLLM, make_fetch, make_page
 from scraper.config import Config
 from scraper.usage import MemoryUsageStore
-from scraper_api.registry import RateLimited, RateLimiter, RunSlots, SessionRegistry, TooBusy
+from scraper.api.registry import RateLimited, RateLimiter, RunSlots, SessionRegistry, TooBusy
 
 A = "https://site.test/a"
 CFG = Config(hosted=True, request_delay=0.0, max_stored_pages=10)

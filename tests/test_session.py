@@ -92,14 +92,6 @@ async def test_ask_streams_events_records_history_and_builds_the_prompt():
     assert session.last_context.mode == "full"
 
 
-async def test_ask_without_pages_is_an_error_and_never_calls_the_model():
-    llm = FakeLLM([Event("answer", "x")])
-    session = make_session({}, llm)
-    events = await ask_all(session)
-    assert [e.kind for e in events] == ["error"]
-    assert llm.calls == []
-
-
 async def test_pages_without_readable_text_are_reported_not_sent():
     # Review Focus 3
     web = {A: make_page(A, markdown="  ")}

@@ -17,7 +17,7 @@ from .events import error_frame, event_dict, frame
 from .registry import Entry, TooBusy
 from .schemas import AskBody, ResumeBody, RetryBody, RunBody, ScrapeBody, SteerBody, page_summary
 
-log = logging.getLogger("scraper_api")
+log = logging.getLogger("scraper.api")
 router = APIRouter()
 STREAM_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
@@ -100,7 +100,9 @@ async def scrape(body: ScrapeBody, entry: Entry = Depends(get_entry), deps: Deps
 
 
 @router.post("/scrape/cancel", status_code=204)
-async def scrape_cancel(entry: Entry = Depends(get_entry)) -> Response:
+@router.post("/agent/stop", status_code=204)
+async def stop(entry: Entry = Depends(get_entry)) -> Response:
+    """Stop whatever the session is doing: a scrape or a run."""
     entry.session.cancel()
     return Response(status_code=204)
 
@@ -120,7 +122,7 @@ async def new_session(entry: Entry = Depends(get_entry)) -> Response:
 @router.post("/ask")
 async def ask(body: AskBody, entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> StreamingResponse:
     _require_room(deps, entry)
-    await deps.catalog.require(body.model)
+    await deps.catalog_for(entry.session.provider).require(body.model)
     return stream_response(deps, entry, lambda: entry.session.ask(body.question, body.model))
 
 
@@ -128,7 +130,7 @@ async def ask(body: AskBody, entry: Entry = Depends(get_entry), deps: Deps = Dep
 async def ask_retry(body: RetryBody, entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> StreamingResponse:
     """Ask the last question again after an answer was cut off."""
     _require_room(deps, entry)
-    await deps.catalog.require(body.model)
+    await deps.catalog_for(entry.session.provider).require(body.model)
     question = entry.session.pop_interrupted()
     if question is None:
         raise ApiError(409, "nothing_to_retry", "There is no interrupted answer to retry.")
@@ -138,7 +140,7 @@ async def ask_retry(body: RetryBody, entry: Entry = Depends(get_entry), deps: De
 @router.post("/agent/run")
 async def agent_run(body: RunBody, entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> StreamingResponse:
     _require_room(deps, entry)
-    await deps.catalog.require(body.model)
+    await deps.catalog_for(entry.session.provider).require(body.model)
     return stream_response(deps, entry, lambda: entry.session.run_agent(body.instruction, body.model, seed_url=body.seed_url))
 
 
@@ -156,12 +158,6 @@ async def agent_proceed(entry: Entry = Depends(get_entry), deps: Deps = Depends(
     if not entry.session.resumable:
         raise ApiError(409, "no_run", "There is no run to resume.")
     return stream_response(deps, entry, entry.session.proceed_run)
-
-
-@router.post("/agent/stop", status_code=204)
-async def agent_stop(entry: Entry = Depends(get_entry)) -> Response:
-    entry.session.cancel()
-    return Response(status_code=204)
 
 
 @router.post("/agent/discard")

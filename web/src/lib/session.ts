@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { isActiveAdmin } from "./roles";
 import { getServices } from "./services";
 
 /** The signed-in person for this request, or null. Cached for the request, so every part of a page may ask. */
@@ -14,7 +15,6 @@ export async function requireSession() {
 
 export async function requireAdmin() {
   const session = await requireSession();
-  const user = session.user as { role?: string | null; banned?: boolean | null };
-  if (user.role !== "admin" || user.banned) redirect("/");
+  if (!isActiveAdmin(session.user)) redirect("/");
   return session;
 }

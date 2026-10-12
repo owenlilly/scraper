@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { headers } from "next/headers";
+import { Mark } from "../../components/Mark";
 import { AdminPanel, type InviteRow, type PersonRow } from "../../components/admin/AdminPanel";
 import { getServices } from "../../lib/services";
 import { requireAdmin } from "../../lib/session";
@@ -18,6 +19,7 @@ export default async function AdminPage() {
     <div className="page">
       <header className="topbar">
         <Link className="wordmark" href="/">
+          <Mark />
           Page Chat
         </Link>
         <Link className="btn btn-quiet" href="/">

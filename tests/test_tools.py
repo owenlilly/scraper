@@ -183,7 +183,7 @@ def test_blocked_page_error_tells_the_model_how_to_retry():
     def blocked(url, mode, *, timeout):
         raise FetchError(f"HTTP 403 from {url}", hint="The site may be blocking simple requests. Try Stealthy mode.", retry_mode="stealthy")
 
-    box, _, _, _ = make_box(fetch_fn=blocked)
+    box, _, _, _ = make_box(fetch_fn=blocked, fallback=False)  # with the fallback on, the tool retries by itself: see test_fetch_fallback
     result = box.execute("fetch_page", {"url": URL})
     assert result.is_error and "HTTP 403" in result.text and "mode='stealthy'" in result.text
 

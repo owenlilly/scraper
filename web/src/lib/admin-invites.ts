@@ -1,6 +1,7 @@
 import { inviteMessage } from "./email";
 import { buildInviteLink } from "./invite-link";
 import { normalizeEmail, type Invite } from "./invites";
+import { isActiveAdmin } from "./roles";
 import type { Services } from "./services";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -23,9 +24,8 @@ export function adminInviteHandlers(services: Services) {
   async function requireAdmin(request: Request): Promise<{ userId: string } | Response> {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!session) return fail(401, "unauthorized", "Sign in to continue.");
-    const user = session.user as { id: string; role?: string | null; banned?: boolean | null };
-    if (user.role !== "admin" || user.banned) return fail(403, "forbidden", "Only administrators can do that.");
-    return { userId: user.id };
+    if (!isActiveAdmin(session.user)) return fail(403, "forbidden", "Only administrators can do that.");
+    return { userId: session.user.id };
   }
 
   /** Cookies are sent with cross-site requests too, so a change must come from one of our own pages. */

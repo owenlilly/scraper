@@ -17,4 +17,4 @@ USER scraper
 
 ENV SCRAPER_HOSTED=true SCRAPER_HOST=0.0.0.0 SCRAPER_PORT=8080
 EXPOSE 8080
-CMD ["/app/.venv/bin/python", "-m", "scraper_api"]
+CMD ["/app/.venv/bin/python", "-m", "scraper"]

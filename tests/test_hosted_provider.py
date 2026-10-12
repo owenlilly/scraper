@@ -2,8 +2,8 @@ import pytest
 
 from scraper.config import Config, load
 from scraper.llm import LMStudio, MistralAPI
-from scraper_api.__main__ import startup_notice
-from scraper_api.app import make_llm
+from scraper.__main__ import startup_notice
+from scraper.api.app import make_llms
 
 HOSTED = {
     "SCRAPER_HOSTED": "true",
@@ -39,10 +39,14 @@ def test_an_unknown_provider_is_still_refused_in_hosted_mode():
         load({**HOSTED, "SCRAPER_API_KEY": "key", "SCRAPER_PROVIDER": "gpt-nine"})
 
 
-def test_make_llm_follows_the_configured_provider():
-    mistral = make_llm(Config(hosted=True, provider="mistral", api_key="k", mistral_base_url="https://mistral.test/v1"))
+def _llm(cfg):
+    return make_llms(cfg)[cfg.provider]
+
+
+def test_make_llms_follows_the_configured_provider():
+    mistral = _llm(Config(hosted=True, provider="mistral", api_key="k", mistral_base_url="https://mistral.test/v1"))
     assert isinstance(mistral, MistralAPI) and mistral.hosted is True and mistral.base_url == "https://mistral.test/v1"
-    local = make_llm(Config(hosted=True, provider="lmstudio", base_url="http://127.0.0.1:1234/v1"))
+    local = _llm(Config(hosted=True, provider="lmstudio", base_url="http://127.0.0.1:1234/v1"))
     assert isinstance(local, LMStudio) and local.hosted is False and local.base_url == "http://127.0.0.1:1234/v1"
 
 

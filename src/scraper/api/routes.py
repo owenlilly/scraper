@@ -7,12 +7,13 @@ import time
 from fastapi import APIRouter, Depends, Header, Response
 
 from scraper.exports import rows_to_csv, rows_to_json
+from scraper.session import SessionBusy
 
 from .accounts import delete_user_data
 from .deps import Deps, get_deps, get_entry
 from .errors import ApiError
 from .registry import Entry
-from .schemas import SETTING_NAMES, DeleteAccountBody, ModelBody, SettingBody, build_state, model_dict
+from .schemas import SETTING_NAMES, DeleteAccountBody, ModelBody, ProviderBody, SettingBody, build_state, model_dict
 
 router = APIRouter()
 DELETE_WAIT_SECONDS = 5.0  # how long a deletion waits for the person's live run to stop
@@ -56,13 +57,13 @@ async def account_data(
 
 @router.get("/state")
 async def state(entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> dict:
-    models, error = await deps.catalog.safe_models()
+    models, error = await deps.catalog_for(entry.session.provider).safe_models()
     return build_state(entry, models, error)
 
 
 @router.get("/models")
 async def models(entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> dict:
-    listed, error = await deps.catalog.safe_models()
+    listed, error = await deps.catalog_for(entry.session.provider).safe_models()
     return {"models": [model_dict(m) for m in listed], "error": error}
 
 
@@ -93,8 +94,20 @@ async def setting(name: str, body: SettingBody, entry: Entry = Depends(get_entry
 
 @router.put("/model", status_code=204)
 async def model(body: ModelBody, entry: Entry = Depends(get_entry), deps: Deps = Depends(get_deps)) -> Response:
-    await deps.catalog.require(body.id)
+    await deps.catalog_for(entry.session.provider).require(body.id)
     entry.session.remember_model(body.id)
+    return Response(status_code=204)
+
+
+@router.put("/provider", status_code=204)
+async def provider(body: ProviderBody, entry: Entry = Depends(get_entry)) -> Response:
+    """Choose which model server this person's runs use. Only while nothing is running: a saved run stays on the provider it began on."""
+    if body.key not in entry.session.providers:
+        raise ApiError(400, "unknown_provider", "That model server is not available here.")
+    try:
+        await entry.session.set_provider(body.key)
+    except SessionBusy as exc:
+        raise ApiError(409, "busy", str(exc)) from None
     return Response(status_code=204)
 
 

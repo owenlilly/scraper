@@ -1,7 +1,6 @@
 """What the routes share: the service objects, and the dependency that turns a bearer token into a user."""
 
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import Depends, Request
 from psycopg_pool import ConnectionPool
@@ -21,9 +20,11 @@ class Deps:
     registry: SessionRegistry
     slots: RunSlots
     limiter: RateLimiter
-    catalog: ModelCatalog
+    catalogs: dict[str, ModelCatalog]  # one per provider people may choose
     pool: ConnectionPool
-    checkpointer: Any = None
+
+    def catalog_for(self, provider: str) -> ModelCatalog:
+        return self.catalogs[provider]
 
 
 def get_deps(request: Request) -> Deps:

@@ -4,7 +4,7 @@
 
 **Goal:** Turn the scraper's agent into a multi-user, Postgres-backed FastAPI service that verifies the web app's bearer tokens, isolates every user, limits cost and abuse, and streams runs to a browser.
 
-**Architecture:** `src/scraper/` stays the library; this plan adds a hosted layer to it (a public-address guard, a usage meter, a hosted fetch function) and a new package `src/scraper_api/` holding Postgres persistence, JWT verification, a per-user session registry and the HTTP routes. The existing NiceGUI app is untouched and keeps working; it is removed by the later UI plan. Auth itself (accounts, invitations) belongs to the web app, in a separate plan; here the API only verifies the tokens it issues.
+**Architecture:** `src/scraper/` stays the library; this plan adds a hosted layer to it (a public-address guard, a usage meter, a hosted fetch function) and a new package `src/scraper/api/` holding Postgres persistence, JWT verification, a per-user session registry and the HTTP routes. The existing NiceGUI app is untouched and keeps working; it is removed by the later UI plan. Auth itself (accounts, invitations) belongs to the web app, in a separate plan; here the API only verifies the tokens it issues.
 
 **Tech Stack:** Python 3.14, FastAPI, psycopg 3 with a connection pool, LangGraph's Postgres checkpointer, PyJWT with `cryptography` (EdDSA), pytest and httpx for tests, Podman for containers.
 
@@ -48,11 +48,11 @@ Set up everything the later tasks stand on. Nothing here changes behaviour.
 
 **Files:**
 - Modify: `pyproject.toml`, `uv.lock`
-- Create: `src/scraper_api/__init__.py`
+- Create: `src/scraper/api/__init__.py`
 
 **Interfaces:**
 - Consumes: Nothing.
-- Produces: The `scraper_api` package exists and imports; the new dependencies are installed; a Postgres the tests may use is reachable through `SCRAPER_TEST_DATABASE_URL`.
+- Produces: The `scraper.api` subpackage exists and imports; the new dependencies are installed; a Postgres the tests may use is reachable through `SCRAPER_TEST_DATABASE_URL`.
 
 - [ ] **Step 1: Check the branch**
 
@@ -93,7 +93,7 @@ packages = ["src/scraper"]
 with:
 
 ```toml
-packages = ["src/scraper", "src/scraper_api"]
+packages = ["src/scraper"]
 ```
 
 - [ ] **Step 5: Create the package**
@@ -129,7 +129,7 @@ Expected: PASS (output contains `database reachable`)
 - [ ] **Step 8: Commit**
 
 ```bash
-git add pyproject.toml uv.lock src/scraper_api/__init__.py
+git add pyproject.toml uv.lock src/scraper/api/__init__.py
 git commit -m "Add the scraper_api package and its dependencies"
 ```
 
@@ -1785,7 +1785,7 @@ git commit -m "Stop a run and keep it resumable when the browser disconnects"
 `PgSessionStore` is a drop-in for the SQLite `SessionStore`, scoped to one user. The existing `Session` needs no change to use it. The tests are the SQLite store's tests ported, plus isolation between users, the caps, and usage counting under racing threads.
 
 **Files:**
-- Create: `src/scraper_api/db.py`, `src/scraper_api/pgstore.py`, `tests/conftest.py`, `tests/test_pgstore.py`, `tests/test_db.py`
+- Create: `src/scraper/api/db.py`, `src/scraper/api/pgstore.py`, `tests/conftest.py`, `tests/test_pgstore.py`, `tests/test_db.py`
 
 **Interfaces:**
 - Consumes: `scraper.store.RunRecord`, `LoadedSession`; `scraper.models.Message`, `TraceEntry`; `scraper.usage.FIELDS`, `UsageLimitReached`; `scraper.config.Config`.
@@ -1812,7 +1812,7 @@ def pg_url():
 
 @pytest.fixture(scope="session")
 def pg_pool(pg_url):
-    from scraper_api.db import make_pool, migrate
+    from scraper.api.db import make_pool, migrate
 
     pool = make_pool(pg_url)
     migrate(pool)
@@ -1823,7 +1823,7 @@ def pg_pool(pg_url):
 @pytest.fixture
 def pg(pg_pool):
     """The migrated pool with every per-user table emptied."""
-    from scraper_api.db import USER_TABLES
+    from scraper.api.db import USER_TABLES
 
     with pg_pool.connection() as conn:
         conn.execute("TRUNCATE " + ", ".join(f"app.{t}" for t in USER_TABLES))
@@ -1835,7 +1835,7 @@ def pg(pg_pool):
 ```python
 from contextlib import contextmanager
 
-from scraper_api.db import migrate
+from scraper.api.db import migrate
 
 
 class FakeConn:
@@ -1890,7 +1890,7 @@ from scraper.config import Config
 from scraper.models import Message, TraceEntry
 from scraper.store import RunRecord
 from scraper.usage import UsageLimitReached, UsageMeter
-from scraper_api.pgstore import PgSessionStore, PgUsageStore
+from scraper.api.pgstore import PgSessionStore, PgUsageStore
 
 CFG = Config(max_stored_pages=3, max_page_chars=50, max_result_rows=4)
 
@@ -2109,7 +2109,7 @@ uv run pytest tests/test_pgstore.py tests/test_db.py -q
 
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 5: Create `src/scraper_api/db.py`**
+- [ ] **Step 5: Create `src/scraper/api/db.py`**
 
 `migrate` creates the `app` schema only when it is missing. This matters: `CREATE SCHEMA IF NOT EXISTS` still needs the `CREATE` privilege on the whole database, which the API's least-privilege role (it owns only its schema) does not have. That was found by running the migration as such a role. The LangGraph checkpoint tables go in the same schema through `search_path`.
 
@@ -2178,7 +2178,7 @@ async def open_checkpointer(url: str, stack: AsyncExitStack) -> AsyncPostgresSav
     return saver
 ```
 
-- [ ] **Step 6: Create `src/scraper_api/pgstore.py`**
+- [ ] **Step 6: Create `src/scraper/api/pgstore.py`**
 
 `session_id()` begins with the user id, so every checkpoint thread id does too (`alice:3fa9c1d2b4e6-1`); that is what lets one user's checkpoints be deleted by prefix and never collide with another's. Caps raise `UsageLimitReached` with a message a person can act on.
 
@@ -2377,7 +2377,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/scraper_api/db.py src/scraper_api/pgstore.py tests/conftest.py tests/test_pgstore.py tests/test_db.py
+git add src/scraper/api/db.py src/scraper/api/pgstore.py tests/conftest.py tests/test_pgstore.py tests/test_db.py
 git commit -m "Store each user's session in Postgres, with daily usage counters"
 ```
 
@@ -2386,7 +2386,7 @@ git commit -m "Store each user's session in Postgres, with daily usage counters"
 This is the one place the Python side learns who is calling. It trusts nothing about the token until the signature, issuer, audience and expiry all check out, and it never calls the web app per request.
 
 **Files:**
-- Create: `src/scraper_api/auth.py`, `tests/jwks_support.py`, `tests/test_auth.py`
+- Create: `src/scraper/api/auth.py`, `tests/jwks_support.py`, `tests/test_auth.py`
 
 **Interfaces:**
 - Consumes: PyJWT (`jwt`, `PyJWKClient`).
@@ -2468,7 +2468,7 @@ import jwt
 import pytest
 
 from jwks_support import AUDIENCE, ISSUER, JWKSServer, Signer
-from scraper_api.auth import AuthError, AuthUnavailable, JWKSVerifier
+from scraper.api.auth import AuthError, AuthUnavailable, JWKSVerifier
 
 
 @pytest.fixture
@@ -2588,7 +2588,7 @@ uv run pytest tests/test_auth.py -q
 
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 4: Create `src/scraper_api/auth.py`**
+- [ ] **Step 4: Create `src/scraper/api/auth.py`**
 
 **Corrected after review:** the paragraph below describes the first version of this file, whose premise was wrong. PyJWT's `PyJWKClient` does refetch on an unknown key id, but only after its own 30 second cooldown, and with key caching on it remembers a key id for the life of the process, so a withdrawn key would stay trusted until restart. The committed `auth.py` keeps its own key cache instead (see "After the final review" at the end of this plan).
 
@@ -2694,7 +2694,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/scraper_api/auth.py tests/jwks_support.py tests/test_auth.py
+git add src/scraper/api/auth.py tests/jwks_support.py tests/test_auth.py
 git commit -m "Verify the web app's bearer tokens against its published keys"
 ```
 
@@ -2703,7 +2703,7 @@ git commit -m "Verify the web app's bearer tokens against its published keys"
 Each person's `Session` lives in memory while they are active and in Postgres always. The registry builds it with that person's store, meter and hosted fetch, so nothing one user does can touch another's.
 
 **Files:**
-- Create: `src/scraper_api/registry.py`, `tests/test_registry.py`
+- Create: `src/scraper/api/registry.py`, `tests/test_registry.py`
 
 **Interfaces:**
 - Consumes: `PgSessionStore`, `UsageMeter`, `make_hosted_fetch`, `Session`.
@@ -2719,7 +2719,7 @@ import pytest
 from fakes import FakeLLM, make_fetch, make_page
 from scraper.config import Config
 from scraper.usage import MemoryUsageStore
-from scraper_api.registry import RateLimited, RateLimiter, RunSlots, SessionRegistry, TooBusy
+from scraper.api.registry import RateLimited, RateLimiter, RunSlots, SessionRegistry, TooBusy
 
 A = "https://site.test/a"
 CFG = Config(hosted=True, request_delay=0.0, max_stored_pages=10)
@@ -2865,7 +2865,7 @@ uv run pytest tests/test_registry.py -q
 
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 3: Create `src/scraper_api/registry.py`**
+- [ ] **Step 3: Create `src/scraper/api/registry.py`**
 
 `get` takes a per-user creation lock so eight simultaneous first requests build one `Session`, not eight. `evict_idle` never drops a session that is busy; an evicted session comes back from Postgres on the next request.
 
@@ -3039,7 +3039,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/scraper_api/registry.py tests/test_registry.py
+git add src/scraper/api/registry.py tests/test_registry.py
 git commit -m "Keep one live session per user, with run and request limits"
 ```
 
@@ -3048,7 +3048,7 @@ git commit -m "Keep one live session per user, with run and request limits"
 Checkpoint tables are created by LangGraph, so they may not exist yet on a fresh database; deletion checks first.
 
 **Files:**
-- Create: `src/scraper_api/accounts.py`, `tests/test_pg_checkpoint.py`
+- Create: `src/scraper/api/accounts.py`, `tests/test_pg_checkpoint.py`
 
 **Interfaces:**
 - Consumes: `db.open_checkpointer`, `db.USER_TABLES`, `SessionRegistry`.
@@ -3064,9 +3064,9 @@ from contextlib import AsyncExitStack
 from fakes import FakeLLM, ScriptedChat, ai, call, make_fetch, make_page
 from scraper.config import Config
 from scraper.usage import MemoryUsageStore
-from scraper_api.accounts import delete_user_data
-from scraper_api.db import open_checkpointer
-from scraper_api.registry import SessionRegistry
+from scraper.api.accounts import delete_user_data
+from scraper.api.db import open_checkpointer
+from scraper.api.registry import SessionRegistry
 
 A = "https://site.test/a"
 CFG = Config(hosted=True, request_delay=0.0)
@@ -3160,7 +3160,7 @@ uv run pytest tests/test_pg_checkpoint.py -q
 
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 3: Create `src/scraper_api/accounts.py`**
+- [ ] **Step 3: Create `src/scraper/api/accounts.py`**
 
 ```python
 """Deleting everything the service holds about one user."""
@@ -3197,7 +3197,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/scraper_api/accounts.py tests/test_pg_checkpoint.py
+git add src/scraper/api/accounts.py tests/test_pg_checkpoint.py
 git commit -m "Delete a user's data and agent checkpoints together"
 ```
 
@@ -3206,7 +3206,7 @@ git commit -m "Delete a user's data and agent checkpoints together"
 The read side of the API, and the whole authentication story. The streaming routes follow in Task 12; until then `/ask` and friends return 404.
 
 **Files:**
-- Create: `src/scraper_api/errors.py`, `catalog.py`, `deps.py`, `schemas.py`, `events.py`, `routes.py`, `app.py` (all under `src/scraper_api/`)
+- Create: `src/scraper/api/errors.py`, `catalog.py`, `deps.py`, `schemas.py`, `events.py`, `routes.py`, `app.py` (all under `src/scraper/api/`)
 - Create: `tests/api_support.py`, `tests/test_api_state.py`
 - Modify: `tests/conftest.py`
 
@@ -3229,11 +3229,11 @@ from jwks_support import AUDIENCE, ISSUER, JWKSServer, Signer
 from scraper.config import Config
 from scraper.llm import Event, ModelInfo
 from scraper.usage import MemoryUsageStore
-from scraper_api.app import create_app
-from scraper_api.auth import JWKSVerifier
-from scraper_api.catalog import ModelCatalog
-from scraper_api.deps import Deps
-from scraper_api.registry import RateLimiter, RunSlots, SessionRegistry
+from scraper.api.app import create_app
+from scraper.api.auth import JWKSVerifier
+from scraper.api.catalog import ModelCatalog
+from scraper.api.deps import Deps
+from scraper.api.registry import RateLimiter, RunSlots, SessionRegistry
 
 A = "https://site.test/a"
 B = "https://site.test/b"
@@ -3514,7 +3514,7 @@ uv run pytest tests/test_api_state.py -q
 
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 5: Create `src/scraper_api/errors.py`**
+- [ ] **Step 5: Create `src/scraper/api/errors.py`**
 
 One error shape everywhere. Validation errors name the field and the rule but never echo the value, which could be a secret or a pasted page.
 
@@ -3551,7 +3551,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     return JSONResponse(error_body("invalid", f"{where or 'request'}: {first.get('msg', 'is not valid')}"), status_code=422)
 ```
 
-- [ ] **Step 6: Create `src/scraper_api/catalog.py`**
+- [ ] **Step 6: Create `src/scraper/api/catalog.py`**
 
 Users may only pick models the provider lists, optionally narrowed by `SCRAPER_ALLOWED_MODELS`. Without this check anyone could choose the most expensive model on your key.
 
@@ -3606,7 +3606,7 @@ class ModelCatalog:
         raise ApiError(400, "unknown_model", "That model is not available. Pick one from the list.")
 ```
 
-- [ ] **Step 7: Create `src/scraper_api/deps.py`**
+- [ ] **Step 7: Create `src/scraper/api/deps.py`**
 
 `current_user` is a plain `def` so FastAPI runs it in a thread: fetching keys can block. Missing or bad credentials are `401`; an unreachable key server is `503`; the per-user rate limit is applied here, once for every authenticated route.
 
@@ -3665,7 +3665,7 @@ async def get_entry(user_id: str = Depends(current_user), deps: Deps = Depends(g
     return await deps.registry.get(user_id)
 ```
 
-- [ ] **Step 8: Create `src/scraper_api/schemas.py`**
+- [ ] **Step 8: Create `src/scraper/api/schemas.py`**
 
 Every body forbids unknown fields and has length limits. `ResumeBody` accepts exactly the three answer shapes the agent understands: text, `{action, note}` and `{allow}`.
 
@@ -3823,7 +3823,7 @@ def build_state(entry, models, models_error: str | None) -> dict:
     }
 ```
 
-- [ ] **Step 9: Create `src/scraper_api/events.py`**
+- [ ] **Step 9: Create `src/scraper/api/events.py`**
 
 ```python
 """Server-sent events: one frame per event, plus a final `end` frame so a finished stream is not mistaken for a dropped one."""
@@ -3845,7 +3845,7 @@ def error_frame(code: str, message: str) -> bytes:
     return frame("error", {"kind": "error", "code": code, "text": message})
 ```
 
-- [ ] **Step 10: Create `src/scraper_api/routes.py`**
+- [ ] **Step 10: Create `src/scraper/api/routes.py`**
 
 ```python
 """Routes that read or change a user's saved state. All but /health and /account-data act on the signed-in user's own session."""
@@ -3956,7 +3956,7 @@ async def rows_json(entry: Entry = Depends(get_entry)) -> Response:
     )
 ```
 
-- [ ] **Step 11: Create `src/scraper_api/app.py`**
+- [ ] **Step 11: Create `src/scraper/api/app.py`**
 
 Docs and the OpenAPI schema are off, every response is `no-store` and `nosniff`, and CORS allows only configured origins with no credentials. The stream routes are added in the next task.
 
@@ -3984,7 +3984,7 @@ from .pgstore import PgUsageStore
 from .registry import RateLimiter, RunSlots, SessionRegistry
 from .routes import router as state_router
 
-log = logging.getLogger("scraper_api")
+log = logging.getLogger("scraper.api")
 EVICT_EVERY_SECONDS = 60
 
 
@@ -4067,7 +4067,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 13: Commit**
 
 ```bash
-git add src/scraper_api tests/api_support.py tests/conftest.py tests/test_api_state.py
+git add src/scraper/api tests/api_support.py tests/conftest.py tests/test_api_state.py
 git commit -m "Serve a user's saved state, settings and downloads over an authenticated API"
 ```
 
@@ -4076,8 +4076,8 @@ git commit -m "Serve a user's saved state, settings and downloads over an authen
 The write side. Streams use server-sent events, read by the browser with `fetch` so the bearer header can be sent.
 
 **Files:**
-- Create: `src/scraper_api/streams.py`, `tests/test_api_runs.py`
-- Modify: `src/scraper_api/app.py`
+- Create: `src/scraper/api/streams.py`, `tests/test_api_runs.py`
+- Modify: `src/scraper/api/app.py`
 
 **Interfaces:**
 - Consumes: Everything from Task 11, plus `Session.release_after_disconnect`.
@@ -4336,7 +4336,7 @@ async def test_a_users_daily_limits_are_their_own(make_api):
 
 
 async def test_a_dropped_stream_stops_the_run_frees_the_slot_and_leaves_it_resumable(api):
-    from scraper_api.streams import stream_response
+    from scraper.api.streams import stream_response
 
     api.model.script = [ai("", call("fetch_page", "c1", url=A)), ai("All done.")]
     entry = await api.deps.registry.get("alice")
@@ -4351,7 +4351,7 @@ async def test_a_dropped_stream_stops_the_run_frees_the_slot_and_leaves_it_resum
 
 
 async def test_an_unexpected_failure_mid_stream_becomes_a_plain_error_frame_that_leaks_nothing(api):
-    from scraper_api.streams import stream_response
+    from scraper.api.streams import stream_response
 
     async def explode():
         raise RuntimeError("secret page text that must not reach anyone")
@@ -4372,7 +4372,7 @@ uv run pytest tests/test_api_runs.py -q
 
 Expected: FAIL (`failed`)
 
-- [ ] **Step 3: Create `src/scraper_api/streams.py`**
+- [ ] **Step 3: Create `src/scraper/api/streams.py`**
 
 Everything that can go wrong before a stream starts is a proper HTTP status (409 busy, 429 limit or server full, 400 unknown model). After it starts, problems are `error` frames. The generator's `finally` calls `release_after_disconnect`, so a browser that leaves mid-run leaves a stopped, resumable run, and the run slot is always released. An unexpected exception becomes a plain message and a log line with only the exception's type, never its text, which could contain page content.
 
@@ -4396,7 +4396,7 @@ from .events import error_frame, event_dict, frame
 from .registry import Entry, TooBusy
 from .schemas import AskBody, ResumeBody, RetryBody, RunBody, ScrapeBody, SteerBody, page_summary
 
-log = logging.getLogger("scraper_api")
+log = logging.getLogger("scraper.api")
 router = APIRouter()
 STREAM_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
@@ -4556,7 +4556,7 @@ async def agent_steer(body: SteerBody, entry: Entry = Depends(get_entry)) -> dic
 
 - [ ] **Step 4: Wire the stream routes into the app**
 
-In `src/scraper_api/app.py`, replace:
+In `src/scraper/api/app.py`, replace:
 
 ```python
 from .routes import router as state_router
@@ -4571,7 +4571,7 @@ from .streams import router as stream_router
 
 - [ ] **Step 5: Include the router**
 
-In `src/scraper_api/app.py`, replace:
+In `src/scraper/api/app.py`, replace:
 
 ```python
     app.include_router(state_router)
@@ -4597,7 +4597,7 @@ Expected: PASS (output contains `passed`)
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/scraper_api/streams.py src/scraper_api/app.py tests/test_api_runs.py
+git add src/scraper/api/streams.py src/scraper/api/app.py tests/test_api_runs.py
 git commit -m "Stream scraping, questions and agent runs to the browser"
 ```
 
@@ -4606,12 +4606,12 @@ git commit -m "Stream scraping, questions and agent runs to the browser"
 The last task makes the service startable and documents what an operator must do before exposing it. It also runs the final gates.
 
 **Files:**
-- Create: `src/scraper_api/__main__.py`, `scripts/check_egress.py`, `tests/test_entrypoint.py`, `tests/test_check_egress.py`, `Containerfile`, `.containerignore`, `compose.yaml`, `docs/hosted-deploy.md`
+- Create: `src/scraper/api/__main__.py`, `scripts/check_egress.py`, `tests/test_entrypoint.py`, `tests/test_check_egress.py`, `Containerfile`, `.containerignore`, `compose.yaml`, `docs/hosted-deploy.md`
 - Modify: `.env.example`, `README.md`
 
 **Interfaces:**
 - Consumes: `app.create_app`, `config.load`.
-- Produces: `python -m scraper_api` starts the service (hosted mode only). `scripts/check_egress.py host:port ...` exits 1 if any target is reachable.
+- Produces: `python -m scraper` starts the service (hosted mode only). `scripts/check_egress.py host:port ...` exits 1 if any target is reachable.
 
 - [ ] **Step 1: Create `tests/test_entrypoint.py`**
 
@@ -4628,20 +4628,20 @@ def run_python(code: str, **env) -> subprocess.CompletedProcess:
 
 
 def test_importing_the_entry_point_switches_cloud_tracing_off_even_if_the_environment_turned_it_on():
-    code = "import os, scraper_api.__main__; print(os.environ['LANGSMITH_TRACING'], os.environ['LANGCHAIN_TRACING_V2'])"
+    code = "import os, scraper.__main__; print(os.environ['LANGSMITH_TRACING'], os.environ['LANGCHAIN_TRACING_V2'])"
     result = run_python(code, LANGSMITH_TRACING="true", LANGCHAIN_TRACING_V2="true")
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["false", "false"]
 
 
 def test_it_refuses_to_start_outside_hosted_mode():
-    result = run_python("from scraper_api.__main__ import main; main()", SCRAPER_HOSTED="false")
+    result = run_python("from scraper.__main__ import main; main()", SCRAPER_HOSTED="false")
     assert result.returncode != 0 and "SCRAPER_HOSTED=true" in (result.stdout + result.stderr)
 
 
 def test_it_refuses_to_start_hosted_without_its_secrets():
     env = {k: "" for k in os.environ if k.startswith(("SCRAPER_", "MISTRAL_"))}
-    result = run_python("from scraper_api.__main__ import main; main()", SCRAPER_HOSTED="true", **env)
+    result = run_python("from scraper.__main__ import main; main()", SCRAPER_HOSTED="true", **env)
     output = result.stdout + result.stderr
     assert result.returncode != 0 and "SCRAPER_HOSTED needs" in output and "Traceback" not in output
 ```
@@ -4701,12 +4701,12 @@ uv run pytest tests/test_entrypoint.py tests/test_check_egress.py -q
 
 Expected: FAIL (`failed`)
 
-- [ ] **Step 4: Create `src/scraper_api/__main__.py`**
+- [ ] **Step 4: Create `src/scraper/api/__main__.py`**
 
 Tracing is forced off before anything from LangChain is imported, exactly as `scraper/__main__.py` does, so page text can never reach LangSmith. One worker, on purpose. Access logging is off so addresses and prompts never reach a log file. A configuration mistake prints one clear line instead of a traceback.
 
 ```python
-"""Entry point: python -m scraper_api"""
+"""Entry point: python -m scraper"""
 
 import os
 
@@ -4731,7 +4731,7 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"Configuration error: {exc}") from None
     if not cfg.hosted:
-        raise SystemExit("scraper_api only runs in hosted mode. Set SCRAPER_HOSTED=true (see .env.example).")
+        raise SystemExit("scraper.api only runs in hosted mode. Set SCRAPER_HOSTED=true (see .env.example).")
     print(f"Serving on {cfg.host}:{cfg.port}. Page text is sent to Mistral for every run.", flush=True)
     # One process on purpose: each user's live Session lives in memory (see the design spec, "Process model").
     uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, workers=1, log_level="info", access_log=False)
@@ -4825,7 +4825,7 @@ USER scraper
 
 ENV SCRAPER_HOSTED=true SCRAPER_HOST=0.0.0.0 SCRAPER_PORT=8080
 EXPOSE 8080
-CMD ["/app/.venv/bin/python", "-m", "scraper_api"]
+CMD ["/app/.venv/bin/python", "-m", "scraper"]
 ```
 
 - [ ] **Step 8: Create `.containerignore`**
@@ -4890,7 +4890,7 @@ volumes:
 The hosted service is two programs and one database:
 
 - the web app (Next.js, on Vercel), which owns accounts, sign-in and invitations;
-- this API (`python -m scraper_api`), which owns each person's sessions, runs and results;
+- this API (`python -m scraper`), which owns each person's sessions, runs and results;
 - Postgres, with one schema for each program.
 
 This page covers the API and the database. It is a single process on purpose: every signed-in user's live session is kept in memory, so do not run more than one copy until sessions are routed by user.
@@ -4988,7 +4988,7 @@ Health check: `GET /health` returns `{"ok": true}` with no sign-in.
 - [ ] **Step 11: Add the hosted settings to `.env.example`**
 
 ```
-# ---- Hosted API (python -m scraper_api). See docs/hosted-deploy.md ----------------------------------------------
+# ---- Hosted API (python -m scraper). See docs/hosted-deploy.md ----------------------------------------------
 # SCRAPER_HOSTED=true
 # SCRAPER_DATABASE_URL=postgresql://scraper_api:change-me@localhost:5432/scraper
 # SCRAPER_JWKS_URL=https://your-web-app.example.com/api/auth/jwks
@@ -5015,7 +5015,7 @@ with:
 
 ## Hosted API
 
-`python -m scraper_api` serves the same agent to many signed-in people from one Postgres-backed process, for the Next.js web app. Setup, settings, the required network rules and a database role layout are in [docs/hosted-deploy.md](docs/hosted-deploy.md). The local app above is unchanged.
+`python -m scraper` serves the same agent to many signed-in people from one Postgres-backed process, for the Next.js web app. Setup, settings, the required network rules and a database role layout are in [docs/hosted-deploy.md](docs/hosted-deploy.md). The local app above is unchanged.
 
 ## Tests
 ```
@@ -5050,7 +5050,7 @@ uv run pytest -rs
 podman build -t page-chat-api -f Containerfile .
 ```
 
-Expected: the build succeeds. **This plan's author could not run this step** (the Podman machine was not responding), so it is unverified. What was verified instead: the locked production-only dependency set installs without dev tools, and `python -m scraper_api` then starts and prints a clear configuration error. If the build fails, fix the `Containerfile` and re-run; do not change the application code to suit it.
+Expected: the build succeeds. **This plan's author could not run this step** (the Podman machine was not responding), so it is unverified. What was verified instead: the locked production-only dependency set installs without dev tools, and `python -m scraper` then starts and prints a clear configuration error. If the build fails, fix the `Containerfile` and re-run; do not change the application code to suit it.
 
 
 - [ ] **Step 15: Run the whole suite**
@@ -5084,7 +5084,7 @@ for i in $(seq 1 30); do uv run pytest -q -p no:cacheprovider -k delivered_flag_
 - [ ] **Step 18: Commit**
 
 ```bash
-git add src/scraper_api/__main__.py scripts tests/test_entrypoint.py tests/test_check_egress.py Containerfile .containerignore compose.yaml docs/hosted-deploy.md .env.example README.md
+git add src/scraper/api/__main__.py scripts tests/test_entrypoint.py tests/test_check_egress.py Containerfile .containerignore compose.yaml docs/hosted-deploy.md .env.example README.md
 git commit -m "Add the hosted entry point, container files and deployment notes"
 ```
 
@@ -5093,7 +5093,7 @@ git commit -m "Add the hosted entry point, container files and deployment notes"
 
 A fresh reviewer read the whole branch and the findings below were fixed, each test-first, in the commits that follow Task 13. The code blocks in the tasks above show the code as first written; the repository holds the corrected version.
 
-- **Oversized request bodies** were read and parsed before the token was checked, so anyone could make the single process buffer a huge body. New `src/scraper_api/limits.py` refuses bodies over 64 KB (on the declared length, or by cutting off a body that streams in without one) before anything reads them. Tests: `tests/test_api_limits.py`.
+- **Oversized request bodies** were read and parsed before the token was checked, so anyone could make the single process buffer a huge body. New `src/scraper/api/limits.py` refuses bodies over 64 KB (on the declared length, or by cutting off a body that streams in without one) before anything reads them. Tests: `tests/test_api_limits.py`.
 - **Token keys**: `JWKSVerifier` now keeps its own key cache (`ttl` 300 s, stale-if-error, a remembered failure is not retried on every request, one forced refresh per 30 s for an unknown key id). A withdrawn key stops being trusted at the next refresh, and a key server outage no longer matters to keys already seen. Tests added to `tests/test_auth.py`.
 - **A question holds the session** like any other work (`Session.ask` takes the same lock), and a stream that loses the race for the session no longer marks the winner's run as stopped. Tests in `tests/test_session.py` and `tests/test_api_runs.py`.
 - **Retained page size**: `make_hosted_fetch` cuts a page to `max_page_chars` before the session keeps it (the model is told when text was cut). Tests in `tests/test_hosted.py`. The download itself is not size-limited; give the container a memory limit (see `docs/hosted-deploy.md`).

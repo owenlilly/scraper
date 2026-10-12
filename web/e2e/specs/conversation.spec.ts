@@ -133,6 +133,100 @@ test.describe("a run of the agent", () => {
   });
 });
 
+test.describe("the browser switch", () => {
+  test("is on to begin with, is kept, and decides whether the agent is given the browser tools", async ({ page }) => {
+    await model.script([{ text: "First." }, { text: "Second." }]);
+    await signedIn(page, "formsswitch");
+    const browser = page.getByLabel("Use the browser");
+    await expect(browser).toBeChecked();
+    await say(page, "Collect the plans.");
+    await expect(page.getByText("First.")).toBeVisible();
+    expect((await model.requests())[0].tools).toContain("browser_submit_form");
+
+    await browser.uncheck();
+    await page.reload();
+    await expect(page.getByLabel("Use the browser")).not.toBeChecked();
+    await say(page, "Collect them again.");
+    await expect(page.getByText("Second.")).toBeVisible();
+    expect((await model.requests())[1].tools).not.toContain("browser_submit_form");
+  });
+
+  test("cannot be changed while a run is working, and is not shown when asking about the pages", async ({ page }) => {
+    await model.script([{ hold: "first", text: "Done." }]);
+    await signedIn(page, "formsbusy");
+    await say(page, "Collect the plans.");
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByLabel("Use the browser")).toBeDisabled();
+    await model.release("first");
+    await expect(page.getByText("Done.")).toBeVisible();
+    await page.getByRole("button", { name: "Ask about the pages" }).click();
+    await expect(page.getByLabel("Use the browser")).toHaveCount(0);
+  });
+});
+
+test.describe("choosing the model server", () => {
+  test("the picker switches provider, says where page text goes, and the choice is kept", async ({ page }) => {
+    await model.script([{ text: "Back on the local model." }]);
+    await signedIn(page, "picker");
+    const picker = page.getByLabel("Model server");
+    await expect(picker).toHaveValue("lmstudio");
+    await expect(page.getByText("Page text is sent to")).toHaveCount(0);
+
+    await picker.selectOption("mistral");
+    await expect(page.getByText("Page text is sent to Mistral.")).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: /reach|unavailable|connect/i })).toBeVisible(); // its address goes nowhere in this stack
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+
+    await page.reload();
+    await expect(page.getByLabel("Model server")).toHaveValue("mistral");
+
+    await page.getByLabel("Model server").selectOption("lmstudio");
+    await expect(page.getByText("Page text is sent to")).toHaveCount(0);
+    await say(page, "Collect the plans.");
+    await expect(page.getByText("Back on the local model.")).toBeVisible();
+  });
+
+  test("cannot be changed while a run is working", async ({ page }) => {
+    await model.script([{ hold: "first", text: "Done." }]);
+    await signedIn(page, "pickerbusy");
+    await say(page, "Collect the plans.");
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByLabel("Model server")).toBeDisabled();
+    await model.release("first");
+    await expect(page.getByText("Done.")).toBeVisible();
+    await expect(page.getByLabel("Model server")).toBeEnabled();
+  });
+});
+
+test.describe("asking about the pages", () => {
+  test("can be sent before any page has been read, and is answered", async ({ page }) => {
+    await model.script([{ text: "I can fetch pages, search the web and fill a table." }]);
+    await signedIn(page, "asknopages");
+    await page.getByRole("button", { name: "Ask about the pages" }).click();
+    await page.getByLabel("Message").fill("What tools do you have?");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText("I can fetch pages, search the web and fill a table.")).toBeVisible();
+    const system = JSON.stringify((await model.requests())[0].messages[0]);
+    expect(system).toContain("No pages have been read yet");
+  });
+
+  test("is held back while a run is working, says why, and can be sent once the run is stopped", async ({ page }) => {
+    await model.script([{ hold: "first", text: "Done." }, { text: "Answer about the page." }]);
+    await signedIn(page, "askbusy");
+    await say(page, "Collect something.");
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await page.getByRole("button", { name: "Ask about the pages" }).click();
+    await page.getByLabel("Message").fill("A question");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Message")).toHaveAttribute("placeholder", /run is working/i);
+    await expect(page.getByText("A run is working, so questions have to wait")).toBeVisible(); // said in plain sight, not only in the empty box
+    await page.getByRole("button", { name: "Stop" }).click();
+    await model.release("first");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+  });
+});
+
 test.describe("a question about the pages", () => {
   test("streams reasoning and a formatted answer", async ({ page }) => {
     await model.script([{ reasoning: "Checking the Team page.", text: "The Team plan costs **$49** a month.\n\n| Plan | Price |\n| --- | --- |\n| Team | $49 |" }]);

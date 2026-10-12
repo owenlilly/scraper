@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../lib/api/client";
+import { readsPage } from "../../lib/api/format";
 import type { WorkspaceState } from "../../lib/api/types";
 import { deriveRunPanel, deriveThread, isWorking } from "../../lib/workspace/derive";
 import type { RunController } from "../../lib/workspace/run";
@@ -34,6 +35,7 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
   const [url, setUrl] = useState(state.settings.url);
   const [follow, setFollow] = useState(state.settings.follow === "1");
   const [depth, setDepth] = useState(Math.min(3, Math.max(1, Number(state.settings.depth) || 1)));
+  const [browser, setBrowser] = useState(state.settings.browser !== "0");
   const [reading, setReading] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -41,7 +43,7 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
   const working = isWorking(state, live);
   const items = useMemo(() => deriveThread(state, live), [state, live]);
   const panel = deriveRunPanel(state, live);
-  const pagesRead = live ? live.log.filter((entry) => entry.name === "fetch_page" && entry.ok).length : 0;
+  const pagesRead = live ? live.log.filter((entry) => readsPage(entry.name) && entry.ok).length : 0;
   const lastMessage = state.history.at(-1);
   const retryable = !live && !working && lastMessage?.role === "assistant" && lastMessage.interrupted;
 
@@ -102,6 +104,16 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
     }
   }
 
+  async function chooseProvider(key: string) {
+    setProblem(null);
+    try {
+      await api.put("/provider", { key });
+    } catch (error) {
+      setProblem(error instanceof ApiError ? error.message : "Could not switch model servers. Try again.");
+    }
+    await refresh();
+  }
+
   async function chooseModel(id: string) {
     await api.put("/model", { id }).catch((error) => onNotice(error instanceof ApiError ? error.message : "Could not switch models."));
     await refresh();
@@ -157,6 +169,15 @@ export function Conversation({ state, run, pendingDrafts, onNotice }: { state: W
           setDepth(value);
           void save("depth", String(value));
         }}
+        browser={browser}
+        browserAvailable={state.browser_available}
+        onBrowser={(on) => {
+          setBrowser(on);
+          void save("browser", on ? "1" : "0");
+        }}
+        providers={state.providers}
+        provider={state.provider}
+        onProvider={(key) => void chooseProvider(key)}
         models={state.models}
         model={model}
         onModel={(id) => void chooseModel(id)}

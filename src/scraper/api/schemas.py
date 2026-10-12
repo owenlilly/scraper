@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from scraper.session import Session
 
-SETTING_NAMES = ("url", "mode", "follow", "depth", "agent")  # form values kept between visits
+SETTING_NAMES = ("url", "mode", "follow", "depth", "agent", "browser")  # form values kept between visits
 RESUME_ACTIONS = ("continue", "wrap_up", "stop")
 
 
@@ -68,6 +68,10 @@ class SteerBody(Body):
 
 class SettingBody(Body):
     value: str = Field(max_length=2048)
+
+
+class ProviderBody(Body):
+    key: str = Field(min_length=1, max_length=40)
 
 
 class ModelBody(Body):
@@ -135,6 +139,7 @@ def build_state(entry, models, models_error: str | None) -> dict:
     return {
         "user": {"id": entry.user_id},
         "provider": {"key": session.llm.key, "name": session.llm.name, "hosted": session.llm.hosted},
+        "providers": [{"key": p.key, "name": p.name, "hosted": p.hosted} for p in session.providers.values()],
         "busy": session.busy,
         "pages": [page_summary(p, used) for p in session.pages],
         "failed": [{"url": url, "reason": why} for url, why in session.failed],
@@ -147,5 +152,6 @@ def build_state(entry, models, models_error: str | None) -> dict:
         "models": [model_dict(m) for m in models],
         "models_error": models_error,
         "fetch_modes": list(session.cfg.allowed_modes),
+        "browser_available": session.cfg.browser,
         "usage": entry.meter.snapshot(),
     }

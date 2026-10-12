@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
-import type { ModelView } from "../../lib/api/types";
+import type { ModelView, ProviderView } from "../../lib/api/types";
 
 export type Mode = "collect" | "ask";
 
@@ -18,6 +18,12 @@ export type ComposerProps = {
   onFollow: (value: boolean) => void;
   depth: number;
   onDepth: (value: number) => void;
+  browser: boolean;
+  browserAvailable: boolean;
+  onBrowser: (on: boolean) => void;
+  providers: ProviderView[];
+  provider: ProviderView;
+  onProvider: (key: string) => void;
   models: ModelView[];
   model: string | null;
   onModel: (id: string) => void;
@@ -44,6 +50,14 @@ export function Composer(p: ComposerProps) {
         ? "Send a note to the agent while it works"
         : "Tell it what to collect";
 
+  // Why Send is greyed out, said where it can be seen (the placeholder disappears as soon as there is text in the box).
+  const held =
+    p.mode === "ask" && p.working
+      ? "A run is working, so questions have to wait. Stop it with the Stop button above, or switch to Collect to send it a note."
+      : p.model === null && !p.modelsError
+        ? "No model is available, so nothing can be sent. Check the model server."
+        : null;
+
   function submit(event: FormEvent) {
     event.preventDefault();
     if (canSend) p.onSend();
@@ -67,6 +81,32 @@ export function Composer(p: ComposerProps) {
               Ask about the pages
             </button>
           </div>
+          <span className="grow" />
+          {p.providers.length > 1 ? (
+            <>
+              <label className="sr" htmlFor="provider">
+                Model server
+              </label>
+              <select id="provider" value={p.provider.key} disabled={p.working} onChange={(event) => p.onProvider(event.target.value)}>
+                {p.providers.map((provider) => (
+                  <option key={provider.key} value={provider.key}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+          <label className="sr" htmlFor="model">
+            Model
+          </label>
+          <select id="model" value={p.model ?? ""} disabled={p.models.length === 0} onChange={(event) => p.onModel(event.target.value)}>
+            {p.models.length === 0 ? <option value="">No model available</option> : null}
+            {p.models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.id}
+              </option>
+            ))}
+          </select>
         </div>
         <label className="sr" htmlFor="composer-text">
           Message
@@ -77,6 +117,12 @@ export function Composer(p: ComposerProps) {
             {p.mode === "ask" ? "Page" : "Start from"}
             <input id="start-url" type="text" inputMode="url" value={p.url} placeholder="Optional: a page address" onChange={(event) => p.onUrl(event.target.value)} onBlur={p.onUrlCommit} />
           </label>
+          {p.mode === "collect" && p.browserAvailable ? (
+            <label className="field-inline" htmlFor="use-browser" title="Let the agent use a real browser to fill in forms, click, scroll and watch a page's network requests">
+              <input id="use-browser" type="checkbox" checked={p.browser} disabled={p.working} onChange={(event) => p.onBrowser(event.target.checked)} />
+              Use the browser
+            </label>
+          ) : null}
           {p.mode === "ask" ? (
             <>
               <label className="field-inline" htmlFor="read-follow">
@@ -101,21 +147,16 @@ export function Composer(p: ComposerProps) {
             </>
           ) : null}
           <span className="grow" />
-          <label className="sr" htmlFor="model">
-            Model
-          </label>
-          <select id="model" value={p.model ?? ""} disabled={p.models.length === 0} onChange={(event) => p.onModel(event.target.value)}>
-            {p.models.length === 0 ? <option value="">No model available</option> : null}
-            {p.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
-            ))}
-          </select>
-          <button className="btn btn-primary" type="submit" disabled={!canSend}>
+          <button className="btn btn-primary send" type="submit" disabled={!canSend}>
             {p.mode === "collect" && p.steering ? "Send note" : "Send"}
           </button>
         </div>
+        {held ? (
+          <p className="muted small" role="status">
+            {held}
+          </p>
+        ) : null}
+        {p.provider.hosted ? <p className="muted small">Page text is sent to {p.provider.name}.</p> : null}
         {p.problem || p.modelsError ? (
           <p className="notice" role="alert">
             {p.problem ?? p.modelsError}

@@ -50,7 +50,7 @@ Browser --cookie--> Next.js on Vercel (UI + Better Auth at /api/auth/*)
 ```
 
 - `web/` is the Next.js app. It owns passwords, sessions and invites. It has no scraping logic.
-- `src/scraper_api/` is the FastAPI service. It has no user table. It verifies the JWT, takes `sub` as `user_id`, and scopes every query to it.
+- `src/scraper/api/` is the FastAPI service. It has no user table. It verifies the JWT, takes `sub` as `user_id`, and scopes every query to it.
 - `src/scraper/` stays the library (agent, tools, fetch, guards, LLM clients). `Session` is already UI-independent.
 - Postgres has one role per schema so the API cannot read password hashes.
 

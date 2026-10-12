@@ -14,7 +14,7 @@ def pg_url():
 
 @pytest.fixture(scope="session")
 def pg_pool(pg_url):
-    from scraper_api.db import make_pool, migrate
+    from scraper.api.db import make_pool, migrate
 
     pool = make_pool(pg_url)
     migrate(pool)
@@ -25,7 +25,7 @@ def pg_pool(pg_url):
 @pytest.fixture
 def pg(pg_pool):
     """The migrated pool with every per-user table emptied."""
-    from scraper_api.db import USER_TABLES
+    from scraper.api.db import USER_TABLES
 
     with pg_pool.connection() as conn:
         conn.execute("TRUNCATE " + ", ".join(f"app.{t}" for t in USER_TABLES))
@@ -55,3 +55,13 @@ async def make_api(pg):
     yield build
     for harness in made:
         await harness.close()
+
+
+@pytest.fixture(autouse=True)
+def _debug_log_off_again():
+    """A test that turns debug logging on must not leave it on for the tests after it."""
+    yield
+    from scraper import debuglog
+    from scraper.config import Config
+
+    debuglog.configure(Config())
