@@ -128,3 +128,82 @@ def test_an_explicit_mapping_never_reads_the_dotenv_file(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("SCRAPER_PORT=9001\n")
     monkeypatch.chdir(tmp_path)
     assert load({}).port == 8080
+
+
+# ---- hosted mode --------------------------------------------------------------
+
+HOSTED_ENV = {
+    "SCRAPER_HOSTED": "true",
+    "SCRAPER_DATABASE_URL": "postgresql://api@db/scraper",
+    "SCRAPER_JWKS_URL": "https://web.test/api/auth/jwks",
+    "SCRAPER_JWT_ISSUER": "https://web.test",
+    "SCRAPER_JWT_AUDIENCE": "https://web.test",
+    "SCRAPER_SERVICE_SECRET": "s3cret",
+    "SCRAPER_API_KEY": "mistral-key",
+}
+
+
+def test_bool_env_values_are_parsed_not_truthy_strings():
+    assert load({"SCRAPER_HOSTED": "false"}).hosted is False
+    assert load({"SCRAPER_HOSTED": "0"}).hosted is False
+    assert load({**HOSTED_ENV, "SCRAPER_HOSTED": "1"}).hosted is True
+    with pytest.raises(ValueError, match="SCRAPER_HOSTED must be true or false"):
+        load({"SCRAPER_HOSTED": "maybe"})
+
+
+def test_hosted_mode_forces_mistral_and_only_the_fast_fetch_mode():
+    cfg = load(HOSTED_ENV)
+    assert cfg.hosted and cfg.provider == "mistral"
+    assert cfg.available_providers == ("mistral",)
+    assert cfg.allowed_modes == ("fast",)
+
+
+def test_local_mode_allows_every_fetch_mode():
+    assert load({}).allowed_modes == ("fast", "dynamic", "stealthy")
+
+
+def test_fetch_modes_can_be_widened_and_are_validated():
+    assert load({**HOSTED_ENV, "SCRAPER_FETCH_MODES": "fast, dynamic"}).allowed_modes == ("fast", "dynamic")
+    with pytest.raises(ValueError, match="SCRAPER_FETCH_MODES"):
+        load({**HOSTED_ENV, "SCRAPER_FETCH_MODES": "fast,teleport"})
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["SCRAPER_DATABASE_URL", "SCRAPER_JWKS_URL", "SCRAPER_JWT_ISSUER", "SCRAPER_JWT_AUDIENCE", "SCRAPER_SERVICE_SECRET", "SCRAPER_API_KEY"],
+)
+def test_hosted_mode_refuses_to_start_without_its_secrets_and_endpoints(missing):
+    env = {k: v for k, v in HOSTED_ENV.items() if k != missing}
+    with pytest.raises(ValueError, match=missing):
+        load(env)
+
+
+def test_hosted_secrets_are_not_shown_in_repr():
+    text = repr(load(HOSTED_ENV))
+    for secret in ("s3cret", "mistral-key", "postgresql://api@db/scraper"):
+        assert secret not in text
+
+
+def test_cors_origins_are_split_and_trimmed():
+    cfg = load({**HOSTED_ENV, "SCRAPER_CORS_ORIGINS": "https://a.test, https://b.test ,"})
+    assert cfg.cors_origin_list == ("https://a.test", "https://b.test")
+    assert load({}).cors_origin_list == ()
+
+
+def test_hosted_limit_defaults_are_set():
+    cfg = load(HOSTED_ENV)
+    assert (cfg.daily_model_calls, cfg.daily_pages, cfg.max_concurrent_runs) == (300, 300, 5)
+    assert (cfg.max_stored_pages, cfg.max_page_chars, cfg.max_result_rows, cfg.requests_per_minute) == (60, 200_000, 2000, 120)
+
+
+def test_allowed_models_are_split_and_trimmed_and_default_to_any():
+    assert load({}).allowed_model_list == ()
+    cfg = load({**HOSTED_ENV, "SCRAPER_ALLOWED_MODELS": "mistral-small-latest, ministral-8b-latest,"})
+    assert cfg.allowed_model_list == ("mistral-small-latest", "ministral-8b-latest")
+
+
+def test_a_missing_api_key_in_hosted_mode_is_reported_as_a_hosted_problem():
+    env = {k: v for k, v in HOSTED_ENV.items() if k != "SCRAPER_API_KEY"}
+    with pytest.raises(ValueError) as caught:
+        load(env)
+    assert "SCRAPER_HOSTED needs SCRAPER_API_KEY" in str(caught.value) and "SCRAPER_PROVIDER" not in str(caught.value)

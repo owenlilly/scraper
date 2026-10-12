@@ -1,0 +1,112 @@
+/* Design tokens from the approved mock. Light is the default; dark follows the system. The yellow highlighter means one thing only:
+   "the model used this page". Everything else stays quiet. */
+:root {
+  --paper: #F3F5F3;
+  --surface: #FFFFFF;
+  --sunken: #E8ECE9;
+  --ink: #14201B;
+  --muted: #55645D;
+  --rule: #D1D8D4;
+  --accent: #1B5A4A;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #DAEAE3;
+  --mark: #F2D94E;
+  --mark-soft: #FAEFB4;
+  --bad: #A63227;
+  --bad-soft: #F5DDD9;
+  --warn: #8A5F00;
+  --warn-soft: #F6E9C8;
+  --ok: #1D7347;
+  --ok-soft: #D8EEDF;
+  --shadow: 0 1px 2px rgba(20, 32, 27, 0.08), 0 10px 28px rgba(20, 32, 27, 0.07);
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.0625rem;
+  --step-2: 1.3125rem;
+  --step-3: 1.875rem;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #171F1D; --surface: #202A27; --sunken: #2A3633; --ink: #E7E3D6; --muted: #A5ADA4; --rule: #3A4945;
+    --accent: #8ED0B4; --accent-ink: #0E1A16; --accent-soft: #28403A; --mark: #E6D04A; --mark-soft: #4A4524;
+    --bad: #E8776F; --bad-soft: #4A2A27; --warn: #E3B35B; --warn-soft: #473A1D; --ok: #86C79A; --ok-soft: #26402F;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 30px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui), system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: var(--step-0);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+[hidden] { display: none !important; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; }
+a { color: var(--accent); text-underline-offset: 3px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.page { min-height: 100%; display: flex; flex-direction: column; }
+.topbar { display: flex; align-items: center; gap: 1rem; padding: 0.7rem 1.25rem; border-bottom: 1px solid var(--rule); background: var(--paper); }
+.wordmark { font-family: var(--font-read), Georgia, serif; font-weight: 650; font-size: 1.3rem; letter-spacing: -0.01em; margin-right: auto; color: var(--ink); text-decoration: none; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  padding: 0.5rem 0.95rem; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); font-weight: 560;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.btn:hover { border-color: var(--muted); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { filter: brightness(1.08); border-color: var(--accent); }
+.btn-quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-quiet:hover { color: var(--ink); background: var(--sunken); border-color: transparent; }
+.btn-danger { color: var(--bad); }
+.btn-small { padding: 0.25rem 0.6rem; font-size: var(--step--1); border-radius: 6px; }
+.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+.link { color: var(--accent); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; }
+
+input[type="text"], input[type="email"], input[type="password"], select {
+  border: 1px solid var(--rule); background: var(--paper); border-radius: 8px; padding: 0.42rem 0.6rem; color: var(--ink);
+}
+
+/* Sign in, sign up and the other account screens */
+.auth { flex: 1; display: grid; place-items: start center; padding: 4rem 1.25rem; }
+.auth-box { width: min(100%, 26rem); display: grid; gap: 1.2rem; }
+.auth-box h1 { font-family: var(--font-read), Georgia, serif; font-size: var(--step-3); line-height: 1.15; font-weight: 600; }
+.auth-box .lede { color: var(--muted); }
+.form { display: grid; gap: 0.9rem; }
+.form label { display: grid; gap: 0.3rem; font-weight: 560; font-size: var(--step--1); }
+.form .hint { font-weight: 400; color: var(--muted); }
+.form input { width: 100%; font-size: var(--step-0); padding: 0.55rem 0.7rem; }
+.form input[readonly] { background: var(--sunken); color: var(--muted); }
+.form .actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.note-box { padding: 0.7rem 0.9rem; border-radius: 8px; background: var(--ok-soft); }
+.error-box { padding: 0.7rem 0.9rem; border-radius: 8px; background: var(--bad-soft); }
+.stack { display: grid; gap: 0.6rem; }
+
+/* Pieces both the workspace and the administrator page use */
+.muted { color: var(--muted); }
+.small { font-size: var(--step--1); }
+.toast {
+  position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); z-index: 50; background: var(--ink); color: var(--paper);
+  padding: 0.6rem 1rem; border-radius: 8px; box-shadow: var(--shadow); max-width: min(92vw, 28rem);
+}
+dialog { border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 1.25rem; width: min(92vw, 26rem); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgba(10, 16, 14, 0.5); }
+dialog h2 { font-family: var(--font-read), Georgia, serif; font-size: var(--step-2); font-weight: 600; margin-bottom: 0.5rem; }
+dialog .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.1rem; flex-wrap: wrap; }
+
+@media (max-width: 900px) {
+  .topbar { padding-inline: 1rem; }
+  .auth { padding-top: 2rem; }
+}

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import replace
 
@@ -964,3 +965,84 @@ async def test_a_message_sent_after_stop_while_a_fetch_finishes_is_handed_back()
     assert events[-1].text == "stopped"
     assert session.take_stopped_drafts() == ["late thought"] and session.run.followups == []
     await proceed_all(session)  # let the graph finish so nothing is left pending
+
+
+# ---- the agent prompt follows the fetch modes on offer ---------------------------
+
+
+def test_the_agent_prompt_advises_other_modes_only_when_they_exist():
+    from scraper.session import agent_system_prompt
+
+    local = agent_system_prompt(Config())
+    hosted = agent_system_prompt(Config(hosted=True))
+    assert "dynamic, then stealthy" in local
+    assert "dynamic, then stealthy" not in hosted
+    assert "Only the fast fetch mode is available" in hosted
+
+
+# ---- the browser goes away mid-run ---------------------------------------------
+
+
+async def test_a_dropped_connection_leaves_the_run_stopped_and_resumable():
+    web = {A: make_page(A, markdown="# A\n\nText.")}
+    session, _ = agent_session(web, [ai("", call("fetch_page", url=A)), ai("All done.")])
+    stream = session.run_agent(f"read {A}", "qwen-test")
+    first = await anext(stream)  # the browser read one event, then went away
+    assert first.kind in ("step", "reasoning", "answer", "tool_start")
+    await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
+    assert session.busy is False  # nothing else is blocked behind the dead stream
+    assert session.run.status == "running"  # nobody has said otherwise yet
+    session.release_after_disconnect()
+    assert session.run.status == "stopped" and session.resumable
+    events = await proceed_all(session)
+    assert events[-1].kind == "done" and session.run.status == "done"
+
+
+async def test_messages_the_agent_never_read_are_handed_back_when_the_connection_drops():
+    web = {A: make_page(A)}
+    session, _ = agent_session(web, [ai("", call("fetch_page", url=A)), ai("All done.")])
+    stream = session.run_agent(f"read {A}", "qwen-test")
+    await anext(stream)
+    assert session.steer("also the footer").status == "queued"
+    await stream.aclose()
+    await asyncio.sleep(0.05)  # let LangChain's error callback finish before the test's loop closes
+    session.release_after_disconnect()
+    assert session.take_stopped_drafts() == ["also the footer"]
+
+
+async def test_releasing_after_a_disconnect_leaves_finished_and_paused_runs_alone():
+    session = await paused_session()
+    session.release_after_disconnect()
+    assert session.run.status == "paused"
+    done, _ = agent_session({}, [ai("Nothing to fetch.")])
+    await run_all(done, "say hi")
+    done.release_after_disconnect()
+    assert done.run.status == "done"
+    Session(CFG, FakeLLM(), make_fetch({})).release_after_disconnect()  # no run at all: nothing to do
+
+
+# ---- a question holds the session like any other work ----------------------------------------------------------------------
+
+
+async def test_a_question_cannot_start_while_the_session_is_busy():
+    web = {A: make_page(A)}
+    session = make_session(web)
+    await session.scrape(A)
+    session.busy = True
+    with pytest.raises(SessionBusy):
+        await anext(session.ask("q?", "qwen-test"))
+
+
+async def test_a_second_question_is_refused_while_the_first_is_streaming_and_the_session_is_free_afterwards():
+    web = {A: make_page(A)}
+    llm = FakeLLM(events=[Event("answer", "one"), Event("answer", "two")])
+    session = make_session(web, llm)
+    await session.scrape(A)
+    first = session.ask("first?", "qwen-test")
+    await anext(first)  # the first answer is mid-stream
+    with pytest.raises(SessionBusy):
+        await anext(session.ask("second?", "qwen-test"))
+    await first.aclose()
+    assert session.busy is False
+    assert [e.kind async for e in session.ask("third?", "qwen-test")] == ["answer", "answer"]

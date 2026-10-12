@@ -72,6 +72,7 @@ class ToolBox:
         timeout: float = 20.0,
         fetched: int = 0,
         grant: int | None = None,
+        allowed_modes: tuple[str, ...] = MODES,
         min_delay: float = 0.0,
         max_delay: float = MAX_FETCH_DELAY,
         delay: float = 0.0,
@@ -90,6 +91,7 @@ class ToolBox:
         self.result_tokens = result_tokens
         self.timeout = timeout
         self.fetched = fetched
+        self.allowed_modes = allowed_modes
         self.approve_host = approve_host
         self.on_page = on_page
         self.on_rows = on_rows
@@ -184,15 +186,16 @@ class ToolBox:
             if remaining > 0:
                 self._sleep(remaining)
 
-    @staticmethod
-    def _mode(value) -> str:
+    def _mode(self, value) -> str:
         if value is None or value == "":
             return "fast"
         if not isinstance(value, str):
             raise ToolArgError("Argument 'mode' must be a string.")
         mode = MODE_ALIASES.get(value.strip().lower(), value.strip().lower())
         if mode not in MODES:
-            raise ToolArgError(f"Unknown mode {value!r}. Use one of: {', '.join(MODES)}.")
+            raise ToolArgError(f"Unknown mode {value!r}. Use one of: {', '.join(self.allowed_modes)}.")
+        if mode not in self.allowed_modes:
+            raise ToolArgError(f"The {mode} mode is not available on this server. Use one of: {', '.join(self.allowed_modes)}.")
         return mode
 
     def _stored_list(self) -> str:
@@ -223,7 +226,7 @@ class ToolBox:
 
     def _page_result(self, page: Page, mode: str, focus: str | None) -> ToolResult:
         note = ""
-        if page.looks_empty and mode == "fast":
+        if page.looks_empty and mode == "fast" and "dynamic" in self.allowed_modes:
             note = " The page looks nearly empty; it may need mode='dynamic'."
         header = f"Fetched {page.url} (mode {mode}): about {estimate_tokens(page.markdown)} tokens, {len(page.links)} links.{note}\n"
         body = view_page(page, focus, max(200, self.result_tokens - estimate_tokens(header) - 10))

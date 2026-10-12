@@ -14,7 +14,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
-from .guards import FOLLOWUP_KEY, ContextTrim, FollowupInbox, RunGuard
+from .guards import FOLLOWUP_KEY, ContextTrim, FollowupInbox, RunGuard, UsageGuard
+from .usage import UsageLimitReached
 
 
 @dataclass(frozen=True)
@@ -54,8 +55,10 @@ async def open_checkpointer(path: Path, stack: AsyncExitStack) -> AsyncSqliteSav
         return saver
 
 
-def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None, on_present=None):
+def build_agent(model, tools, *, system_prompt, checkpointer, max_steps, max_context_tokens, on_grant=None, followups=None, on_inject=None, on_present=None, usage_charge=None):
     middleware = [ContextTrim(max_context_tokens), RunGuard(max_steps=max_steps, on_grant=on_grant)]
+    if usage_charge is not None:
+        middleware.insert(0, UsageGuard(usage_charge))  # first: a run paused inside RunGuard must not be charged again when it resumes
     if followups is not None:
         middleware.append(FollowupInbox(followups, on_inject, on_present))  # last: a run paused inside RunGuard must still pass through it on resume
     return create_agent(
@@ -74,6 +77,8 @@ def _plain(content) -> str:
 
 
 def describe_error(exc: Exception, base_url: str, provider: str = "LM Studio") -> str:
+    if isinstance(exc, UsageLimitReached):
+        return str(exc)
     if isinstance(exc, openai.APIStatusError):
         if exc.status_code in (401, 403):
             return f"{provider} rejected the API key. Check SCRAPER_API_KEY."

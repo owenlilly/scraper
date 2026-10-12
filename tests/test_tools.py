@@ -459,3 +459,30 @@ def test_build_tools_wraps_the_toolbox_with_schemas_and_artifacts():
     assert added.artifact["rows_added"] == 1 and rows == [{"a": 1}]
     bad = tools["extract"].invoke({"type": "tool_call", "name": "extract", "args": {"url": URL, "selector": "li["}, "id": "c3"})
     assert bad.artifact["ok"] is False and "Invalid CSS selector" in bad.content
+
+
+# ---- fetch modes the server offers --------------------------------------------
+
+
+def test_a_mode_the_server_does_not_offer_is_explained_and_nothing_is_fetched():
+    box, pages, _, calls = make_box({URL: PAGE}, allowed_modes=("fast",))
+    result = box.execute("fetch_page", {"url": URL, "mode": "dynamic"})
+    assert result.is_error
+    assert "not available" in result.text and "fast" in result.text
+    assert calls == [] and pages == []
+
+
+def test_aliases_resolve_before_the_availability_check():
+    box, _, _, calls = make_box({URL: PAGE}, allowed_modes=("fast",))
+    assert box.execute("fetch_page", {"url": URL, "mode": "static"}).is_error is False
+    assert box.execute("fetch_page", {"url": URL, "mode": "js"}).is_error is True  # js means dynamic, which is off
+    assert [mode for _, mode in calls] == ["fast"]
+
+
+def test_the_empty_page_hint_only_suggests_dynamic_when_it_is_available():
+    tiny = parse_html("<html><head><title>T</title></head><body><div id='app'></div></body></html>", URL)
+    tiny = tiny.__class__(url=tiny.url, title=tiny.title, markdown=tiny.markdown, links=tiny.links, looks_empty=True)
+    box, _, _, _ = make_box({URL: tiny}, allowed_modes=("fast",))
+    assert "dynamic" not in box.execute("fetch_page", {"url": URL}).text
+    box, _, _, _ = make_box({URL: tiny})
+    assert "dynamic" in box.execute("fetch_page", {"url": URL}).text

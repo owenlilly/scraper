@@ -22,6 +22,7 @@ from .llm import Event
 from .models import Message, TraceEntry
 from .store import RunRecord, SessionStore
 from .tools import ToolBox, build_tools, host_of, hosts_in
+from .usage import UsageLimitReached, UsageMeter
 
 SYSTEM_PROMPT = (
     "You answer questions about web pages the user has scraped. "
@@ -37,7 +38,7 @@ How to work:
 - Use extract with a CSS selector when the user names one or the data repeats on the page. Otherwise read the page text.
 - Record each item you were asked to collect with add_rows: one object per item, with the same keys every time. Add rows as you go, not only at the end.
 - When you are done, reply with a short plain-text summary of what you found. Do not call a tool in your final reply.
-- If a page is blocked or empty, try another fetch mode (dynamic, then stealthy) before giving up.
+{mode_advice}
 
 Asking the user:
 - Call ask_user, with options when you can, if the instruction is ambiguous, a login or CAPTCHA blocks a page, every fetch mode failed, or a choice would change the outcome. Do not guess when a wrong guess wastes many fetches.
@@ -66,8 +67,15 @@ class SteerResult:
     id: str = ""
 
 
+MODE_ADVICE = {
+    True: "- If a page is blocked or empty, try another fetch mode (dynamic, then stealthy) before giving up.",
+    False: "- Only the fast fetch mode is available here. If a page is blocked or empty, say so instead of retrying with another mode.",
+}
+
+
 def agent_system_prompt(cfg: Config) -> str:
-    return AGENT_PROMPT.format(max_steps=cfg.agent_max_steps, max_pages=cfg.agent_max_pages)
+    other_modes = any(mode != "fast" for mode in cfg.allowed_modes)
+    return AGENT_PROMPT.format(max_steps=cfg.agent_max_steps, max_pages=cfg.agent_max_pages, mode_advice=MODE_ADVICE[other_modes])
 
 
 class Session:
@@ -81,8 +89,10 @@ class Session:
         checkpointer=None,
         model_factory=None,
         providers: dict | None = None,
+        usage: UsageMeter | None = None,
     ) -> None:
         self.cfg = cfg
+        self.usage = usage
         self.providers: dict = dict(providers) if providers else {llm.key: llm}
         self.provider: str = llm.key
         self._fetch = fetch_fn
@@ -170,6 +180,16 @@ class Session:
         self._cancel.set()
         if self.run is not None and self.run.status == "running":
             self._stopped_drafts.extend(self._take_undelivered())  # Stop means stop: hand unread messages back
+
+    def release_after_disconnect(self) -> None:
+        """The browser went away while a run was streaming. The run stops here and can be resumed, as after a crash."""
+        run = self.run
+        if run is None or run.status != "running":
+            return
+        self._stopped_drafts.extend(self._take_undelivered())
+        run.status = "stopped"
+        run.pending = None
+        self._save_run()
 
     def steer(self, text: str) -> SteerResult:
         """Queue a message for the live run to read before its next model call."""
@@ -341,6 +361,12 @@ class Session:
         return kept, used
 
     async def ask(self, question: str, model: str) -> AsyncIterator[Event]:
+        with self._exclusive():  # a question holds the session like a run does: two at once would interleave the chat history
+            async with aclosing(self._ask(question, model)) as events:
+                async for event in events:
+                    yield event
+
+    async def _ask(self, question: str, model: str) -> AsyncIterator[Event]:
         self.last_ask_interrupted = False
         if not self.pages:
             yield Event("error", "Scrape a page first.")
@@ -359,6 +385,12 @@ class Session:
             *history,
             {"role": "user", "content": question},
         ]
+        if self.usage is not None:
+            try:
+                self.usage.charge_model_call()
+            except UsageLimitReached as exc:
+                yield Event("error", str(exc))
+                return
         answer, reasoning, failed = "", "", False
         async with aclosing(self.llm.stream_chat(model, messages)) as stream:
             async for event in stream:
@@ -396,6 +428,7 @@ class Session:
             allowed_hosts=set(run.allowed_hosts),
             max_pages=run.max_pages or self.cfg.agent_max_pages,
             grant=self.cfg.agent_max_pages,
+            allowed_modes=self.cfg.allowed_modes,
             result_tokens=self.cfg.tool_result_tokens,
             timeout=self.cfg.fetch_timeout,
             fetched=run.fetched,
@@ -415,6 +448,7 @@ class Session:
                 1000, int(window * self.cfg.context_fraction) - ctx.estimate_tokens(run.system_prompt) - self.cfg.reply_reserve
             ),
             on_grant=lambda reason, toolbox=self._toolbox, run=run: self._grant_pages(toolbox, run),
+            usage_charge=self.usage.charge_model_call if self.usage is not None else None,
             followups=lambda: list(self.run.followups) if self.run is not None else [],
             on_inject=lambda followup, toolbox=self._toolbox: toolbox.allowed_hosts.update(h for h in hosts_in(followup["text"]) if h),
             on_present=self._adopt_followup,

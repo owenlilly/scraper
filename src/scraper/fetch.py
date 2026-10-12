@@ -17,6 +17,7 @@ EMPTY_THRESHOLD = 200
 BROWSER_MISSING = ("Executable doesn't exist", "playwright install", "scrapling install")
 _SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+MAX_REDIRECTS = 5
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,9 @@ def parse_html(html: str, url: str) -> Page:
 def _fast(url: str, timeout: float):
     from scrapling.fetchers import Fetcher
 
-    return Fetcher.get(url, timeout=timeout, retries=2)
+    # "safe" makes curl refuse a redirect to a private or loopback address. It is the library default; spelled out so a
+    # change of default cannot quietly turn it off.
+    return Fetcher.get(url, timeout=timeout, retries=2, follow_redirects="safe", max_redirects=MAX_REDIRECTS)
 
 
 def _dynamic(url: str, timeout: float):
