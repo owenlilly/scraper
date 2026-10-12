@@ -74,6 +74,34 @@ New Postgres schema `pipeline`. Workers write; the API reads. The chat's SQL too
 
 **Provenance and re-parsing.** Every version points to the fetch it came from. A re-parse reads archived bodies and writes new `record_version` rows with a bumped `parser_version`; no network is involved.
 
+### 4.1 Repository layer
+
+All access to pipeline data goes through repositories. SQL, psycopg and blob-store calls appear only inside repository implementations. Spiders, the item pipeline, the scheduler, the worker, the LLM jobs and the API routes depend on repository interfaces and never import psycopg.
+
+**Interfaces.** One `typing.Protocol` per aggregate, in `scraper/pipeline/repositories/` (interfaces and plain domain types, no database imports):
+
+| Repository | Owns | Notable methods |
+|---|---|---|
+| `SourceRepository` | `source` | `get`, `list_enabled`, `list_due(now)`, `update_settings` |
+| `RunRepository` | `run` | `enqueue`, `claim_next(worker_id)`, `heartbeat`, `finish(stats, status)`, `previous_complete(source)` |
+| `FetchRepository` | `fetch` plus the `BlobStore` | `save(response) -> FetchRef`, `get`, `open_body(ref)` |
+| `RecordRepository` | `record`, `record_version` | `upsert_batch(items) -> UpsertResult`, `current(source, key)`, `history(record_id)`, `tombstone_unseen(source, run, guard)`, `reparse_candidates(source, parser_version)` |
+| `EnrichmentRepository` | `enrichment` | `pending_versions(source, kind, prompt_version, model, limit)`, `save` |
+| `AlertRepository` | `alert` | `raise_`, `resolve`, `open_for(source)`, `attach_triage` |
+
+**Read side.** The API and the chat use separate read-only query repositories (`RecordQueries`, `RunQueries`, `AlertQueries`) that return view-shaped DTOs and never mutate. The chat's `query_sql` tool is the only place raw SQL is accepted from outside the repository code: it goes through a single `ReadOnlySql` gateway that connects as the read-only role, over the documented views, with a statement timeout and row cap.
+
+**Unit of work.** A `UnitOfWork` context manager owns one transaction and exposes the repositories that share it (`with uow: uow.records.upsert_batch(...); uow.runs.finish(...)`). Commit happens on clean exit, rollback on exception. A repository method never commits by itself, so a batch of record upserts and the run's progress counters commit atomically. This replaces the existing habit of opening a pooled connection inside every method.
+
+**Implementations.**
+- `Pg*` implementations on psycopg 3 and the existing pool, in `scraper/pipeline/pg/`. They hold every query, row mapping and `ON CONFLICT` clause, and the `SKIP LOCKED` claim.
+- `InMemory*` implementations in `tests/` support (or `scraper/pipeline/memory/` if the worker dev mode needs them), backing fast tests of spiders, the item pipeline and the LLM jobs without Postgres.
+- `FilesystemBlobStore` behind the `BlobStore` interface, as in section 4.
+
+**Contract tests.** One parametrized suite per repository runs against both the in-memory and the Postgres implementations (Postgres skipped when unavailable, following the existing convention). Behaviour like "unchanged hash adds no version", "tombstone guard refuses a short run" and "two workers never claim the same run" is specified once and enforced on both, so the fakes cannot drift from the real thing.
+
+**Domain types.** Repositories take and return frozen dataclasses (`SourceConfig`, `Run`, `FetchRef`, `RecordItem`, `RecordVersion`, `Alert`), not dict rows, cursors or ORM objects.
+
 ## 5. Spider contract and item pipeline
 
 A source author writes:
@@ -101,7 +129,7 @@ class AcmePrices(SourceSpider):
 1. Validate against `item_schema`. Failures are counted per field, with a capped sample of payloads kept in `run.stats`.
 2. Normalize with the schema's field normalizers (prices, whitespace, URLs, dates).
 3. Compute the natural key and the content hash.
-4. Upsert through an injected `RecordSink`, batched per transaction.
+4. Upsert through the injected `RecordRepository` (inside a `UnitOfWork`), batched per transaction.
 
 **Runs.** The scheduler enqueues a run when a source is due. A worker claims it and runs it in a child process with a per-run checkpoint directory, so a crashed run resumes if the worker restarts on the same volume. At the end, `CrawlStats` is copied into `run.stats` and the tombstone guard runs.
 
@@ -128,7 +156,8 @@ Decided from file names; the plan confirms each by checking imports.
 
 - Spiders are tested against fixture HTML served by a local test server; no live sites in tests.
 - Item pipeline, normalizers, hashing and versioning: unit tests.
-- Storage, queue claiming (`SKIP LOCKED`), tombstone guard and re-parse: Postgres tests, skipped when no Postgres is available, following the existing convention.
+- Spiders, the item pipeline, the scheduler and the LLM jobs run against the in-memory repositories.
+- Repository behaviour (queue claiming with `SKIP LOCKED`, versioning, tombstone guard, re-parse) is specified in shared contract tests that run against both the in-memory and Postgres implementations; the Postgres half is skipped when no Postgres is available, following the existing convention.
 - LLM jobs use fake model clients and recorded fixtures. Live Mistral is never used for tests; LM Studio is for manual checks only.
 
 ## 9. Delivery and open items
@@ -146,3 +175,5 @@ Three plans, each with its own spec-to-plan cycle, in this order:
 - Default values for the tombstone guard (X%, N runs).
 - Confirm `is_blocked` is called for every response, and the checkpoint resume behaviour, against Scrapling 0.4.15's engine.
 - Fate of `fetch.py`, `netguard.py`, `guards.py`.
+- Whether the in-memory repositories live in `tests/` support only or ship in the package (needed only if a worker dev mode without Postgres is wanted).
+- The existing `PgSessionStore` follows the same shape informally (same methods as the SQLite store, no declared interface). It is deleted with the agent, so it is not migrated to this layer.
