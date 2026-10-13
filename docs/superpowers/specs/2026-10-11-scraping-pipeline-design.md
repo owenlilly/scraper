@@ -76,7 +76,11 @@ New Postgres schema `pipeline`. Workers write; the API reads. The chat's SQL too
 
 ### 4.1 Repository layer
 
-All access to pipeline data goes through repositories, and a repository is the class that talks to the database. Each one is a concrete class in `scraper/pipeline/repositories/` that holds the SQL, the `ON CONFLICT` clauses and the row mapping for its aggregate, and runs them on a psycopg 3 connection. There are no separate interface and implementation layers, and no in-memory twins. Spiders, the item pipeline, the scheduler, the worker, the LLM jobs and the API routes call repositories and write no SQL themselves.
+All access to pipeline data goes through repositories, and a repository is the class that talks to the database. Each one is a concrete class in `scraper/pipeline/repositories/` that holds the queries and the row-to-dataclass mapping for its aggregate, and runs them on a SQLAlchemy 2.1 `Session` (psycopg 3 driver, named explicitly in the URL). There are no separate interface and implementation layers, and no in-memory twins. Spiders, the item pipeline, the scheduler, the worker, the LLM jobs and the API routes call repositories and write no SQL themselves.
+
+**ORM models and the hot path.** The tables are described once, as SQLAlchemy models in `scraper/pipeline/models.py` (explicit constraint naming convention, schema `pipeline`). Models are persistence details and never leave a repository; repositories return frozen dataclasses. Cold paths (sources, runs, fetch rows) use the ORM. The hot path, `RecordRepository.upsert_batch`, is set-based SQLAlchemy Core: a few statements per chunk of up to 500 records instead of a few per record. In a benchmark of 1000 items in batches of 50 on a local Postgres, an ORM-per-item port took 400 ms, the previous per-item psycopg code 133 ms, and set-based Core 90 ms; raw set-based psycopg was fastest at 32 ms, a gap that is invisible at crawl rates and was traded for single-source-of-truth models and migrations. A statement cannot touch a row twice, so a key repeated within one batch collapses and the last one wins.
+
+**No string-built SQL.** Every value is a bound parameter and no query is assembled from strings, so injection through scraped text is not possible by construction. The one place that accepts SQL from outside the repositories is the chat's `query_sql` tool (section 6), which is defended at the database role, not the library. Items are also stripped of NUL characters before storage (Postgres cannot store them in text or JSONB, and one in a batch would otherwise fail the whole batch).
 
 | Repository | Owns | Notable methods |
 |---|---|---|
@@ -92,6 +96,15 @@ All access to pipeline data goes through repositories, and a repository is the c
 **Read side.** The API and the chat read through the same repositories, using read methods that return view-shaped DTOs, or through read-only methods on dedicated repositories where a query spans aggregates (for example `RecordRepository.search` for full-text). There is no second data-access path. The one place that accepts SQL from outside the repository code is the chat's `query_sql` tool, and that is a method on a `ReadOnlySqlRepository` that runs on a connection using the read-only role, over the documented views, with a statement timeout and a row cap.
 
 **Domain types.** Repositories take and return frozen dataclasses (`SourceConfig`, `Run`, `FetchRef`, `RecordItem`, `RecordVersion`, `Alert`), not dict rows or cursors.
+
+### 4.2 Migrations
+
+Alembic 1.20 owns the `pipeline` schema and nothing else. The web app owns `auth` and the API owns `app`; Alembic's `include_name` filter hides them, so autogenerate can never propose dropping their tables.
+
+- Migrations live in `scraper/pipeline/migrations/versions/`, are generated with `make pipeline-revision MSG="what changed"` (autogenerate from the models), and are reviewed and committed like code. The version table is `pipeline.alembic_version`.
+- `python -m scraper.pipeline migrate` (also `make pipeline-migrate`) runs `upgrade head`; `run` does it first. The schema is created when absent, because a role that only owns the schema cannot run `CREATE SCHEMA`.
+- The test suite builds its schema by running the real migrations from nothing, so every Postgres test exercises them. Dedicated tests check: upgrade from empty, upgrading twice is a no-op, every migration downgrades, there is one head, **the models and the migrations agree** (autogenerate finds no diff), and other schemas are invisible to Alembic.
+- `alembic upgrade head --sql` writes the SQL for review or for a DBA.
 
 **Tests.** Repositories are tested against a real Postgres, so queue claiming (`SKIP LOCKED`), versioning, the tombstone guard and re-parse are checked on the database that will run them. Spider and pipeline tests also use Postgres through the unit of work. See section 8.
 
