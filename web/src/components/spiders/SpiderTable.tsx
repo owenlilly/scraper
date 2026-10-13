@@ -43,7 +43,7 @@ export function SpiderTable() {
         <p className="sp-empty">No spiders are registered. Add one to <code>SPIDERS</code> in <code>scraper/pipeline/sources</code> and restart the API.</p>
       ) : (
         <div className="sp-table-wrap">
-          <table className="sp-table">
+          <table className="sp-table sp-list">
             <thead>
               <tr>
                 <th scope="col">Spider</th>

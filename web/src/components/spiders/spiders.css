@@ -53,11 +53,12 @@
 .totals dt { color: var(--muted); font-size: var(--step--1); }
 .totals dd { margin: 0; font-family: var(--font-read), Georgia, serif; font-size: var(--step-2); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-.sp-ledger { width: 100%; border-collapse: collapse; font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+.sp-ledger { width: 100%; border-collapse: collapse; font-size: var(--step--1); }
 .sp-ledger th { text-align: left; color: var(--muted); font-weight: 650; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--ink); white-space: nowrap; }
 .sp-ledger td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--ledger-line); }
 .sp-ledger tr:last-child td { border-bottom: 0; }
 .sp-ledger .n { width: 3.2rem; text-align: right; color: var(--muted); background: var(--accent-soft); border-right: 3px double var(--accent); }
+.sp-ledger .n, .sp-ledger .num, .sp-code { font-variant-numeric: tabular-nums; }
 .sp-ledger .num { text-align: right; white-space: nowrap; }
 .sp-ledger .addr { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-code { font-weight: 650; }
@@ -76,6 +77,16 @@
 .sp-rejects .fields dd { margin: 0; overflow-wrap: anywhere; }
 .sp-empty { padding: 1.4rem 1.1rem; border: 1px dashed var(--rule); border-radius: var(--radius-l); color: var(--muted); }
 
+@media (max-width: 40rem) {
+  /* The spider list becomes one block per spider, so its buttons are never off to the side of a scrolling table. */
+  .sp-list thead { display: none; }
+  .sp-list tr { display: grid; gap: 0.35rem; padding: 0.8rem 0; border-bottom: 1px solid var(--ledger-line); }
+  .sp-list tr:last-child { border-bottom: 0; }
+  .sp-list td { display: block; padding: 0 1rem; border: 0; }
+  .sp-list tbody tr:hover td { background: transparent; }
+  .sp-list .act { text-align: left; white-space: normal; display: flex; flex-wrap: wrap; gap: 0.4rem; padding-top: 0.3rem; }
+  .sp-list .act .btn + .btn { margin-left: 0; }
+}
 @media (max-width: 56rem) {
   .sp-grid { grid-template-columns: minmax(0, 1fr); }
   .runlist { display: none; }

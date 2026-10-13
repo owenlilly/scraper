@@ -1,8 +1,18 @@
-import { hostAndPath } from "../../lib/api/format";
 import { formatBytes, statusTone } from "../../lib/spiders/derive";
 import type { FetchRow } from "../../lib/spiders/types";
 
 const SHOWN = 200;
+
+/** What tells one page of a crawl from the next: its path, query and fragment. The host is the same on nearly every row, so it
+ *  is left to the tooltip. */
+function where(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return url;
+  }
+}
 
 /** Every page the run has fetched, newest first, numbered in the order they were fetched. */
 export function RunLedger({ rows, running }: { rows: FetchRow[] | undefined; running: boolean }) {
@@ -37,7 +47,7 @@ export function RunLedger({ rows, running }: { rows: FetchRow[] | undefined; run
                     <span className={`sp-code ${statusTone(row.status)}`}>{row.status}</span>
                   </td>
                   <td className="addr" title={row.url}>
-                    {hostAndPath(row.url)}
+                    {where(row.url)}
                   </td>
                   <td className="num">{formatBytes(row.size)}</td>
                 </tr>
