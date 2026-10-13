@@ -76,6 +76,7 @@ class SourceSpider(Spider):
         self.trial = ctx.kind == "trial"
         self.trial_requests = int(ctx.options.get("max_requests", TRIAL_DEFAULT_REQUESTS))
         self.stopped_at_cap = False
+        self.pause_was_requested = False
         self._trial_items: list[dict] = []
         self._stop_lock = threading.Lock()
         self._stop_asked = False
@@ -187,6 +188,9 @@ class SourceSpider(Spider):
             self.stop_once()
 
     async def on_close(self) -> None:
+        # Scrapling reports `paused` only when it keeps a checkpoint directory, which the pipeline does not, so a stop from the
+        # page, Ctrl+C or the cap would read as a normal finish. The engine still holds the request here.
+        self.pause_was_requested = bool(getattr(self._engine, "_pause_requested", False))
         await self._flush()
 
     def pipeline_stats(self) -> dict:
