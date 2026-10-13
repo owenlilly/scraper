@@ -7,3 +7,4 @@ __pycache__/
 .env
 .idea/
 debug-logs/
+pipeline-blobs/

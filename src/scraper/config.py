@@ -75,6 +75,7 @@ class Config:
     access_log: bool = True  # one line per request: method, path, status. Page addresses and prompts travel in bodies, never in paths
     max_concurrent_runs: int = 5  # across all users: the API is one process
     requests_per_minute: int = 120  # per user, on routes that do not stream
+    pipeline_blob_dir: str = "pipeline-blobs"  # where the scraping pipeline archives every raw response, compressed
 
     @property
     def available_providers(self) -> tuple[str, ...]:
