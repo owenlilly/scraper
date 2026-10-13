@@ -979,6 +979,7 @@ def test_a_spider_that_cannot_be_built_fails_the_run_instead_of_leaving_it_runni
 
     run = run_source(Broken, pipeline, blobs)
     assert run.status == "failed" and "could not start the spider" in run.error
+```
 
 - [ ] **Step 2: Run to verify they fail**
 
