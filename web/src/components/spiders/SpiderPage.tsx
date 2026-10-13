@@ -3,20 +3,24 @@
 import Link from "next/link";
 import { useState } from "react";
 import { isActive } from "../../lib/spiders/derive";
+import { capChoices, locationOptions } from "../../lib/spiders/settings";
 import { Toast, useToast } from "../Toast";
-import { messageOf, useFetchFeed, useRun, useRunActions, useRuns } from "./queries";
+import { messageOf, useFetchFeed, useRun, useRunActions, useRuns, useSettings } from "./queries";
 import { RunHeader } from "./RunHeader";
 import { RunLedger } from "./RunLedger";
 import { RunList } from "./RunList";
 import { TrialResults } from "./TrialResults";
 import { useNow } from "./useNow";
 
-const CAPS = [1, 3, 5, 10, 20];
-
 export function SpiderPage({ name }: { name: string }) {
   const runs = useRuns(name);
+  const settings = useSettings(name);
+  const view = settings.data;
+  const places = locationOptions(view);
+  const hasLocations = Boolean(view?.locations_setting);
   const [picked, setPicked] = useState<number | null>(null); // null follows the newest run
-  const [cap, setCap] = useState(5);
+  const [cap, setCap] = useState<number | null>(null); // null follows the saved trial default
+  const [place, setPlace] = useState<string | null>(null); // null is the first location
   const [toast, setToast] = useToast();
   const selectedId = picked ?? runs.data?.[0]?.id ?? null;
   const run = useRun(selectedId);
@@ -28,6 +32,13 @@ export function SpiderPage({ name }: { name: string }) {
   const now = useNow(inFlight);
   const busy = start.isPending || stop.isPending || retry.isPending;
 
+  const savedTrial = typeof view?.settings.trial_max_requests === "number" ? view.settings.trial_max_requests : 5;
+  const trialCap = cap ?? savedTrial;
+  const locationId = places.some((option) => option.id === place) ? place! : (places[0]?.id ?? undefined);
+  const needsLocation = hasLocations && places.length === 0;
+  const invalid = (view?.problems.length ?? 0) > 0;
+  const blocked = busy || inFlight || needsLocation || invalid;
+
   return (
     <>
       <div className="sp-head">
@@ -38,24 +49,41 @@ export function SpiderPage({ name }: { name: string }) {
           <h1>{name}</h1>
         </div>
         <div className="sp-controls">
+          {places.length > 0 ? (
+            <label>
+              Location
+              <select value={locationId} onChange={(event) => setPlace(event.target.value)}>
+                {places.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label>
             Trial pages
-            <select value={cap} onChange={(event) => setCap(Number(event.target.value))}>
-              {CAPS.map((value) => (
+            <select value={trialCap} onChange={(event) => setCap(Number(event.target.value))}>
+              {capChoices(savedTrial).map((value) => (
                 <option key={value} value={value}>
                   {value}
                 </option>
               ))}
             </select>
           </label>
-          <button className="btn" type="button" disabled={busy || inFlight} onClick={() => start.mutate({ name, kind: "trial", maxRequests: cap })}>
+          <button className="btn" type="button" disabled={blocked} onClick={() => start.mutate({ name, kind: "trial", maxRequests: trialCap, location: locationId })}>
             Trial run
           </button>
-          <button className="btn btn-primary" type="button" disabled={busy || inFlight} onClick={() => start.mutate({ name, kind: "live" })}>
+          <button className="btn btn-primary" type="button" disabled={blocked} onClick={() => start.mutate({ name, kind: "live", location: locationId })}>
             Run now
           </button>
+          <Link className="btn btn-quiet" href={`/spiders/${name}/settings`}>
+            Settings
+          </Link>
         </div>
       </div>
+      {needsLocation ? <p className="muted small">Add a location in Settings to run this spider.</p> : null}
+      {invalid ? <p className="sp-notice">The saved settings are not valid, so runs are refused. Fix them in Settings.</p> : null}
       {inFlight ? <p className="muted small">A run is already in flight, so a new one cannot start until it ends.</p> : null}
 
       {runs.isPending ? (
@@ -90,7 +118,7 @@ export function SpiderPage({ name }: { name: string }) {
               <>
                 <RunHeader run={current} now={now} busy={busy} onStop={() => stop.mutate(current.id)} onRetry={() => retry.mutate(current.id)} />
                 <RunLedger rows={feed.data} running={running} />
-                <TrialResults key={current.id} run={current} />
+                <TrialResults key={current.id} run={current} view={view} />
               </>
             )}
           </div>

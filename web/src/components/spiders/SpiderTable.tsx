@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ago, canRetry, canStop, isActive, isStopping } from "../../lib/spiders/derive";
 import type { Run } from "../../lib/spiders/types";
 import { Toast, useToast } from "../Toast";
@@ -18,6 +19,7 @@ export function SpiderTable() {
   const sources = useSources();
   const [toast, setToast] = useToast();
   const { start, stop, retry } = useRunActions(setToast);
+  const [chosen, setChosen] = useState<Record<string, string>>({}); // spider name to the location picked in its row
   const anyActive = sources.data?.some((source) => source.latest_run && isActive(source.latest_run.status)) ?? false;
   const now = useNow(anyActive);
   const busy = start.isPending || stop.isPending || retry.isPending;
@@ -55,44 +57,66 @@ export function SpiderTable() {
               </tr>
             </thead>
             <tbody>
-              {sources.data.map(({ name, latest_run: run }) => (
-                <tr key={name}>
-                  <td className="name">
-                    <Link href={`/spiders/${name}`}>{name}</Link>
-                  </td>
-                  <td>
-                    {run ? (
-                      <>
-                        <StatusPill run={run} /> <span className="muted small">{ago(run.finished_at ?? run.started_at ?? run.queued_at, now)}</span>
-                      </>
-                    ) : (
-                      <span className="muted">Never run</span>
-                    )}
-                  </td>
-                  <td className="muted">{run ? recordsNote(run) : "None yet"}</td>
-                  <td className="act">
-                    {run && isActive(run.status) ? (
-                      <button className="btn btn-small" type="button" disabled={busy || !canStop(run)} onClick={() => stop.mutate(run.id)}>
-                        {isStopping(run) ? "Stopping…" : "Stop"}
-                      </button>
-                    ) : (
-                      <>
-                        {run && canRetry(run) ? (
-                          <button className="btn btn-small" type="button" disabled={busy} onClick={() => retry.mutate(run.id)}>
-                            Retry
+              {sources.data.map(({ name, latest_run: run, locations }) => {
+                const place = locations.some((option) => option.id === chosen[name]) ? chosen[name] : locations[0]?.id;
+                return (
+                  <tr key={name}>
+                    <td className="name">
+                      <Link href={`/spiders/${name}`}>{name}</Link>
+                      {locations.length > 1 ? (
+                        <select
+                          className="sp-where"
+                          aria-label={`Location for ${name}`}
+                          value={place}
+                          onChange={(event) => setChosen((current) => ({ ...current, [name]: event.target.value }))}
+                        >
+                          {locations.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : locations.length === 1 ? (
+                        <span className="sp-where"> {locations[0].label}</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      {run ? (
+                        <>
+                          <StatusPill run={run} /> <span className="muted small">{ago(run.finished_at ?? run.started_at ?? run.queued_at, now)}</span>
+                        </>
+                      ) : (
+                        <span className="muted">Never run</span>
+                      )}
+                    </td>
+                    <td className="muted">{run ? recordsNote(run) : "None yet"}</td>
+                    <td className="act">
+                      {run && isActive(run.status) ? (
+                        <button className="btn btn-small" type="button" disabled={busy || !canStop(run)} onClick={() => stop.mutate(run.id)}>
+                          {isStopping(run) ? "Stopping…" : "Stop"}
+                        </button>
+                      ) : (
+                        <>
+                          {run && canRetry(run) ? (
+                            <button className="btn btn-small" type="button" disabled={busy} onClick={() => retry.mutate(run.id)}>
+                              Retry
+                            </button>
+                          ) : null}
+                          <button className="btn btn-small btn-primary" type="button" disabled={busy} onClick={() => start.mutate({ name, kind: "live", location: place })}>
+                            Run now
                           </button>
-                        ) : null}
-                        <button className="btn btn-small btn-primary" type="button" disabled={busy} onClick={() => start.mutate({ name, kind: "live" })}>
-                          Run now
-                        </button>
-                        <button className="btn btn-small" type="button" disabled={busy} onClick={() => start.mutate({ name, kind: "trial" })}>
-                          Trial run
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                          <button className="btn btn-small" type="button" disabled={busy} onClick={() => start.mutate({ name, kind: "trial", location: place })}>
+                            Trial run
+                          </button>
+                        </>
+                      )}
+                      <Link className="btn btn-small btn-quiet" href={`/spiders/${name}/settings`}>
+                        Settings
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

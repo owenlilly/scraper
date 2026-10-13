@@ -1,19 +1,24 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
-import type { Run } from "../../lib/spiders/types";
+import { asStrings, columnsFor, fieldsNote } from "../../lib/spiders/settings";
+import type { Run, SettingsView } from "../../lib/spiders/types";
 
-const MAX_COLUMNS = 6;
 const text = (value: unknown): string => (typeof value === "string" ? value : value === null || value === undefined ? "" : JSON.stringify(value));
 
-/** What a trial parsed and what it rejected. A live run shows only its rejected samples. Give it `key={run.id}` so each run starts on its own first tab. */
-export function TrialResults({ run }: { run: Run }) {
+/** What a trial parsed and what a run rejected. A live run shows only its rejected samples. The columns follow the spider's visible
+ *  fields (every field when none are chosen). A rejected item's reason always shows, so a hidden field cannot hide the problem.
+ *  Give it `key={run.id}` so each run starts on its own first tab. */
+export function TrialResults({ run, view }: { run: Run; view?: SettingsView }) {
   const trial = run.kind === "trial";
   const items = run.stats.trial_items ?? [];
   const rejected = run.stats.rejected_samples ?? [];
   const [tab, setTab] = useState<"parsed" | "rejected">(trial ? "parsed" : "rejected");
   if (!trial && rejected.length === 0) return null;
-  const columns = [...new Set(items.flatMap((item) => Object.keys(item)))].slice(0, MAX_COLUMNS);
+  const known = view?.fields ?? [...new Set([...items.flatMap((item) => Object.keys(item)), ...rejected.flatMap((sample) => Object.keys(sample.item))])];
+  const columns = columnsFor(known, asStrings(view?.settings.visible_fields));
+  const note = fieldsNote(columns.length, known.length);
   const byField = Object.entries(run.stats.rejected_by_field ?? {}).map(([field, count]) => `${field} ${count}`).join(", ");
 
   return (
@@ -28,6 +33,12 @@ export function TrialResults({ run }: { run: Run }) {
           Rejected items ({run.stats.items_rejected ?? 0})
         </button>
       </div>
+      {note ? (
+        <p className="sp-note-link">
+          {note}.{" "}
+          <Link href={`/spiders/${run.source}/settings`}>Change in Settings</Link>
+        </p>
+      ) : null}
       <div role="tabpanel" id="panel-results" aria-labelledby={tab === "parsed" ? "tab-parsed" : "tab-rejected"}>
         {tab === "parsed" ? (
           items.length === 0 ? (
@@ -67,12 +78,14 @@ export function TrialResults({ run }: { run: Run }) {
               {rejected.map((sample, index) => (
                 <li key={index}>
                   <dl className="fields">
-                    {Object.entries(sample.item).map(([key, value]) => (
-                      <div key={key} style={{ display: "contents" }}>
-                        <dt>{key}</dt>
-                        <dd>{value}</dd>
-                      </div>
-                    ))}
+                    {columns
+                      .filter((column) => column in sample.item)
+                      .map((column) => (
+                        <div key={column} style={{ display: "contents" }}>
+                          <dt>{column}</dt>
+                          <dd>{sample.item[column]}</dd>
+                        </div>
+                      ))}
                   </dl>
                   <p className="why">{sample.errors.join("; ")}</p>
                 </li>

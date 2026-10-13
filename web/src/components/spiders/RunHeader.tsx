@@ -12,6 +12,7 @@ export function RunHeader({ run, now, busy, onStop, onRetry }: { run: Run; now: 
     run.started_at ? `Started ${ago(run.started_at, now)}` : `Queued ${ago(run.queued_at, now)}`,
     took ? `${took} elapsed` : null,
     run.retry_of ? `Retry of #${run.retry_of}` : null,
+    run.location ? `Location: ${run.location.label}` : null,
   ].filter(Boolean);
   return (
     <section className="run-head" aria-label={`Run ${run.id}`}>

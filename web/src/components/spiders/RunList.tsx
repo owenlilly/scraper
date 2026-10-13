@@ -16,6 +16,7 @@ export function RunList({ runs, selectedId, onSelect, now }: { runs: Run[]; sele
             <button type="button" aria-current={run.id === selectedId} onClick={() => onSelect(run.id)}>
               <b>#{run.id}</b>
               <StatusPill run={run} />
+              {run.location ? <span className="sp-where">{run.location.label}</span> : null}
               <span className="when">{when(run, now)}</span>
             </button>
           </li>
@@ -25,6 +26,7 @@ export function RunList({ runs, selectedId, onSelect, now }: { runs: Run[]; sele
         {runs.map((run) => (
           <option key={run.id} value={run.id}>
             #{run.id} {run.kind === "trial" ? "trial " : ""}
+            {run.location ? `${run.location.label}, ` : ""}
             {statusLabel(run.status).toLowerCase()}, {when(run, now)}
           </option>
         ))}
