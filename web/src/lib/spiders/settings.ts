@@ -82,3 +82,46 @@ export function parseProblem(message: string | null): Problem | null {
   const row = second !== undefined && /^\d+$/.test(second) ? Number(second) : null;
   return { key, row, field: row !== null ? (third ?? null) : null };
 }
+
+// ---- stored values the form cannot draw, and which row a message means ------------------------------------------------------------
+
+/** The settings the page draws itself; a spider's own come from the form description. */
+const COMMON_KEYS = ["visible_fields", "trial_max_requests", "max_requests", "request_delay", "concurrency"];
+
+export const drawnKeys = (form: FormField[]): string[] => [...COMMON_KEYS, ...form.map((field) => field.key)];
+
+/** Only the settings the form can draw. A key the model no longer knows is dropped, so saving replaces the whole object and cannot
+ *  be refused for something the administrator has no way to see or change. */
+export const pickKnown = (settings: Record<string, unknown>, keys: string[]): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(settings).filter(([key]) => keys.includes(key)));
+
+/** Whether a problem is about something on the screen. If not, it must be shown in the summary, or nobody would see it. */
+export const problemIsDrawn = (problem: Problem | null, keys: string[]): boolean => problem !== null && keys.includes(problem.key);
+
+/** A list of records from whatever was stored: anything that is not a list of objects is nothing, not a crash. */
+export const asList = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && !Array.isArray(entry)) : [];
+
+/** `locations.1.geo_id: ...` means the second row, whose boxes are labelled "location 2". Say it the way the boxes do. */
+export function describeCellProblem(message: string, noun: string, items: FormField[]): string {
+  const problem = parseProblem(message);
+  if (!problem || problem.row === null) return message;
+  const rest = message.slice(message.indexOf(": ") + 2);
+  const column = items.find((item) => item.key === problem.field)?.label ?? problem.field;
+  const who = `${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${problem.row + 1}`;
+  return column ? `${who}, ${column}: ${rest}` : `${who}: ${rest}`;
+}
+
+export type RunBlock = "loading" | "failed" | "busy" | "in-flight" | "no-locations" | "invalid";
+
+/** Why a run cannot be started right now, or null if it can. The settings must have loaded: until they have, the spider's locations and
+ *  validity are unknown, and a click would start a run that the API refuses. */
+export function runBlock(state: { busy: boolean; inFlight: boolean; loading: boolean; failed: boolean; needsLocation: boolean; invalid: boolean }): RunBlock | null {
+  if (state.loading) return "loading";
+  if (state.failed) return "failed";
+  if (state.busy) return "busy";
+  if (state.inFlight) return "in-flight";
+  if (state.needsLocation) return "no-locations";
+  if (state.invalid) return "invalid";
+  return null;
+}

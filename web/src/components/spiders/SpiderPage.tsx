@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { isActive } from "../../lib/spiders/derive";
-import { capChoices, locationOptions } from "../../lib/spiders/settings";
+import { capChoices, locationOptions, runBlock } from "../../lib/spiders/settings";
 import { Toast, useToast } from "../Toast";
 import { messageOf, useFetchFeed, useRun, useRunActions, useRuns, useSettings } from "./queries";
 import { RunHeader } from "./RunHeader";
@@ -37,7 +37,8 @@ export function SpiderPage({ name }: { name: string }) {
   const locationId = places.some((option) => option.id === place) ? place! : (places[0]?.id ?? undefined);
   const needsLocation = hasLocations && places.length === 0;
   const invalid = (view?.problems.length ?? 0) > 0;
-  const blocked = busy || inFlight || needsLocation || invalid;
+  const block = runBlock({ busy, inFlight, loading: settings.isPending, failed: settings.isError, needsLocation, invalid });
+  const blocked = block !== null;
 
   return (
     <>
@@ -82,6 +83,14 @@ export function SpiderPage({ name }: { name: string }) {
           </Link>
         </div>
       </div>
+      {settings.isError ? (
+        <div className="error-box" role="alert">
+          Could not load this spider's settings, so runs cannot start. {messageOf(settings.error)}{" "}
+          <button className="link" type="button" onClick={() => settings.refetch()}>
+            Try again
+          </button>
+        </div>
+      ) : null}
       {needsLocation ? <p className="muted small">Add a location in Settings to run this spider.</p> : null}
       {invalid ? <p className="sp-notice">The saved settings are not valid, so runs are refused. Fix them in Settings.</p> : null}
       {inFlight ? <p className="muted small">A run is already in flight, so a new one cannot start until it ends.</p> : null}

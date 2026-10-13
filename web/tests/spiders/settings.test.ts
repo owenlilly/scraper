@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  addRecord, asStrings, capChoices, columnsFor, fieldsNote, isChanged, locationOptions, moveRow, numberFrom, parseProblem, removeRecord,
-  rowsFromSettings, setCell, singular, toggleRow, visibleFromRows,
+  addRecord, asList, asStrings, capChoices, columnsFor, describeCellProblem, drawnKeys, fieldsNote, isChanged, locationOptions, moveRow, numberFrom,
+  parseProblem, pickKnown, problemIsDrawn, removeRecord, rowsFromSettings, runBlock, setCell, singular, toggleRow, visibleFromRows,
 } from "../../src/lib/spiders/settings";
 import type { FormField, SettingsView } from "../../src/lib/spiders/types";
 
@@ -107,5 +107,61 @@ describe("a problem from the API", () => {
     expect(parseProblem("The saved settings are not valid (max_pages: too big). Fix them in Settings.")).toBeNull();
     expect(parseProblem(null)).toBeNull();
     expect(parseProblem("Something went wrong")).toBeNull();
+  });
+});
+
+
+const field = (key: string, label = key): FormField => ({
+  key, label, description: null, type: "string", nullable: false, default: null, minimum: null, maximum: null, minLength: null, maxLength: null, maxItems: null,
+});
+
+describe("stored values the form cannot draw", () => {
+  it("keeps only the settings the form draws, so a save replaces the whole object and drops the rest", () => {
+    expect(pickKnown({ colour: 1, max_pages: 3, visible_fields: ["id"] }, ["max_pages", "visible_fields"])).toEqual({ max_pages: 3, visible_fields: ["id"] });
+    expect(pickKnown({}, ["max_pages"])).toEqual({});
+  });
+  it("draws the five common settings and the spider's own", () => {
+    expect(drawnKeys([field("locations"), field("max_pages")])).toEqual(["visible_fields", "trial_max_requests", "max_requests", "request_delay", "concurrency", "locations", "max_pages"]);
+  });
+  it("says whether a problem is about something on the screen", () => {
+    const keys = drawnKeys([field("locations")]);
+    expect(problemIsDrawn(parseProblem("locations.0.geo_id: too short"), keys)).toBe(true);
+    expect(problemIsDrawn(parseProblem("colour: Extra inputs are not permitted"), keys)).toBe(false);
+    expect(problemIsDrawn(null, keys)).toBe(false);
+  });
+  it("reads a list from whatever was stored, and nothing from a value that is not one", () => {
+    expect(asList([{ a: 1 }, "x", null, { b: 2 }])).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(asList("x")).toEqual([]);
+    expect(asList(undefined)).toEqual([]);
+    expect(asList({ a: 1 })).toEqual([]);
+  });
+});
+
+describe("a problem in one cell of a list", () => {
+  const items = [field("geo_id", "GeoId"), field("geo_name", "GeoName")];
+  it("counts rows from one, as the boxes are labelled, and names the column by its label", () => {
+    expect(describeCellProblem("locations.1.geo_id: String should have at least 1 character", "location", items)).toBe("Location 2, GeoId: String should have at least 1 character");
+    expect(describeCellProblem("locations.0.geo_name: too long", "location", items)).toBe("Location 1, GeoName: too long");
+  });
+  it("leaves a message that names no row as it is", () => {
+    expect(describeCellProblem("locations: Location 3 repeats the GeoId of location 1.", "location", items)).toBe("locations: Location 3 repeats the GeoId of location 1.");
+  });
+});
+
+describe("whether a run may be started", () => {
+  const ready = { busy: false, inFlight: false, loading: false, failed: false, needsLocation: false, invalid: false };
+  it("allows it when nothing stands in the way", () => expect(runBlock(ready)).toBeNull());
+  it("waits for the settings to load, and says so if they could not", () => {
+    expect(runBlock({ ...ready, loading: true })).toBe("loading");
+    expect(runBlock({ ...ready, failed: true })).toBe("failed");
+  });
+  it("names the other reasons", () => {
+    expect(runBlock({ ...ready, busy: true })).toBe("busy");
+    expect(runBlock({ ...ready, inFlight: true })).toBe("in-flight");
+    expect(runBlock({ ...ready, needsLocation: true })).toBe("no-locations");
+    expect(runBlock({ ...ready, invalid: true })).toBe("invalid");
+  });
+  it("reports the first reason when there are several, loading before anything else", () => {
+    expect(runBlock({ ...ready, loading: true, busy: true, invalid: true })).toBe("loading");
   });
 });

@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import {
-  addRecord, asStrings, isChanged, moveRow, numberFrom, parseProblem, removeRecord, rowsFromSettings, setCell, singular, toggleRow,
-  visibleFromRows, type FieldRow,
+  addRecord, asList, asStrings, describeCellProblem, drawnKeys, isChanged, moveRow, numberFrom, parseProblem, pickKnown, problemIsDrawn, removeRecord,
+  rowsFromSettings, setCell, singular, toggleRow, visibleFromRows, type FieldRow,
 } from "../../lib/spiders/settings";
 import type { FormField, SettingsView } from "../../lib/spiders/types";
 import { Toast, useToast } from "../Toast";
@@ -110,7 +110,7 @@ function RecordsEditor({ field, value, onChange, problem }: { field: FormField; 
       )}
       {problem ? (
         <p className="sp-bad" role="alert">
-          {problem}
+          {describeCellProblem(problem, noun, items)}
         </p>
       ) : null}
       <div>
@@ -123,12 +123,14 @@ function RecordsEditor({ field, value, onChange, problem }: { field: FormField; 
 }
 
 function Editor({ name, view, onSaved }: { name: string; view: SettingsView; onSaved: () => void }) {
-  const [values, setValues] = useState<Values>(() => ({ ...view.settings }));
+  const keys = drawnKeys(view.form);
+  const [values, setValues] = useState<Values>(() => pickKnown(view.settings, keys)); // a stored key the model no longer knows is dropped on save
   const [rows, setRows] = useState<FieldRow[]>(() => rowsFromSettings(view.fields, asStrings(view.settings.visible_fields)));
   const [problem, setProblem] = useState<string | null>(null);
   const save = useSaveSettings(name, onSaved, setProblem);
 
-  const next: Values = { ...values, visible_fields: visibleFromRows(rows, view.fields) };
+  const lists = Object.fromEntries(view.form.filter((field) => field.type === "array").map((field) => [field.key, asList(values[field.key])]));
+  const next: Values = { ...values, ...lists, visible_fields: visibleFromRows(rows, view.fields) };
   const dirty = isChanged(next, view.settings);
   const where = parseProblem(problem);
   const about = (key: string) => (where?.key === key ? problem : null);
@@ -141,7 +143,7 @@ function Editor({ name, view, onSaved }: { name: string; view: SettingsView; onS
   }
 
   function discard() {
-    setValues({ ...view.settings });
+    setValues(pickKnown(view.settings, keys));
     setRows(rowsFromSettings(view.fields, asStrings(view.settings.visible_fields)));
     setProblem(null);
   }
@@ -160,7 +162,7 @@ function Editor({ name, view, onSaved }: { name: string; view: SettingsView; onS
           The saved settings are not valid, so runs are refused until they are fixed: {view.problems.join(" ")}
         </div>
       ) : null}
-      {problem && !where ? (
+      {problem && !problemIsDrawn(where, keys) ? (
         <div className="error-box" role="alert">
           {problem}
         </div>
@@ -211,7 +213,7 @@ function Editor({ name, view, onSaved }: { name: string; view: SettingsView; onS
         <section className="sp-section" aria-label={`${name} settings`}>
           {view.form.map((field) =>
             field.type === "array" ? (
-              <RecordsEditor key={field.key} field={field} value={(values[field.key] as Values[] | undefined) ?? []} onChange={(list) => set(field.key, list)} problem={about(field.key)} />
+              <RecordsEditor key={field.key} field={field} value={asList(values[field.key])} onChange={(list) => set(field.key, list)} problem={about(field.key)} />
             ) : (
               <label key={field.key} className="sp-field" htmlFor={`f-${field.key}`}>
                 {field.label}
