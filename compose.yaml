@@ -30,5 +30,21 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
 
+  worker:
+    build:
+      context: .
+      dockerfile: Containerfile
+    command: ["/app/.venv/bin/python", "-m", "scraper.pipeline", "worker"]
+    env_file: .env
+    environment:
+      SCRAPER_DATABASE_URL: postgresql://scraper:${POSTGRES_PASSWORD}@db:5432/scraper
+      SCRAPER_PIPELINE_BLOB_DIR: /data/blobs
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - blobs:/data/blobs
+
 volumes:
   dbdata:
+  blobs:

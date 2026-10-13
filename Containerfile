@@ -12,7 +12,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
-RUN useradd --system --create-home --uid 10001 scraper
+RUN useradd --system --create-home --uid 10001 scraper && mkdir -p /data/blobs && chown scraper /data/blobs
 USER scraper
 
 ENV SCRAPER_HOSTED=true SCRAPER_HOST=0.0.0.0 SCRAPER_PORT=8080

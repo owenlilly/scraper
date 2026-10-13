@@ -26,7 +26,7 @@ stack_up() {
   LOGS=$(mktemp -d)
   SECRET=$(node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))")
 
-  psql "$E2E_DATABASE_URL" -q -c "DROP SCHEMA IF EXISTS auth CASCADE" -c "DROP SCHEMA IF EXISTS app CASCADE" -c "CREATE SCHEMA auth"
+  psql "$E2E_DATABASE_URL" -q -c "DROP SCHEMA IF EXISTS auth CASCADE" -c "DROP SCHEMA IF EXISTS app CASCADE" -c "DROP SCHEMA IF EXISTS pipeline CASCADE" -c "CREATE SCHEMA auth"
   export DATABASE_URL="$E2E_DATABASE_URL" BETTER_AUTH_SECRET="$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")" \
     BETTER_AUTH_URL="$WEB_URL" API_URL="$API_URL" API_AUDIENCE="$API_URL" SERVICE_SECRET="$SECRET" \
     EMAIL_TRANSPORT=log ADMIN_EMAIL=owner@example.com
