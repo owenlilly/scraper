@@ -40,13 +40,39 @@ def test_a_new_record_changed_record_and_repeat_sighting(uow):
         assert len(work.records.history(source.id, "b")) == 1
 
 
-def test_the_same_key_twice_in_one_batch_is_one_record(uow):
+def test_a_key_repeated_within_a_batch_collapses_and_the_last_one_wins(uow):
     with uow() as work:
         source = work.sources.ensure("shop")
         run = work.runs.enqueue(source.id)
-        result = work.records.upsert_batch(source.id, run.id, "1", [item("a", "x"), item("a", "x")])
-        assert (result.created, result.unchanged) == (1, 1)
+        result = work.records.upsert_batch(source.id, run.id, "1", [item("a", "first"), item("a", "second")])
+        assert (result.created, result.changed, result.unchanged) == (1, 0, 0)  # one statement cannot touch a row twice
         assert work.records.count(source.id) == 1
+        assert work.records.current(source.id, "a").data == {"value": "second"}
+
+
+def test_hostile_text_in_scraped_values_is_stored_as_data_and_never_run_as_sql(uow):
+    hostile = "x'); DROP TABLE pipeline.record; -- \\ %s %(x)s {0} :name"
+    with uow() as work:
+        source = work.sources.ensure(hostile)  # a source name is also text that came from outside
+        run = work.runs.enqueue(source.id)
+        work.records.upsert_batch(source.id, run.id, hostile, [RecordItem(hostile, {"title": hostile}, "hash-h")])
+    with uow() as work:
+        assert work.sources.get(hostile).id == source.id
+        stored = work.records.current(source.id, hostile)
+        assert stored.data == {"title": hostile} and stored.parser_version == hostile
+        assert work.records.count(source.id) == 1  # and the table is still there
+
+
+def test_a_big_batch_is_split_into_chunks_and_still_counted_once(uow):
+    from scraper.pipeline.repositories.records import CHUNK
+
+    many = [item(f"k{n}", "x") for n in range(CHUNK * 2 + 7)]
+    with uow() as work:
+        source = work.sources.ensure("shop")
+        run = work.runs.enqueue(source.id)
+        assert work.records.upsert_batch(source.id, run.id, "1", many).created == len(many)
+        assert work.records.upsert_batch(source.id, run.id, "1", many).unchanged == len(many)
+        assert work.records.count(source.id) == len(many)
 
 
 def test_records_with_the_same_key_in_different_sources_are_separate(uow):

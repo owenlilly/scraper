@@ -1,7 +1,7 @@
 # Common tasks. Run `make` to list them. Containers use Podman.
 .DEFAULT_GOAL := help
 MAIL_NAME ?= scraper-mailpit
-.PHONY: debug-log help install api web mail mail-stop migrate test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
+.PHONY: debug-log help install api web mail mail-stop migrate pipeline-migrate pipeline-revision pipeline-run test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
 
 # Scratch databases for the tests. `make test-db` starts a Postgres that has all three. Override any of these to use your own;
 # each database's schemas are dropped and recreated, so never point them at data you want to keep.
@@ -32,6 +32,16 @@ mail-stop: ## Remove the Mailpit container
 
 migrate: ## Create or update the web app's tables in the auth schema
 	cd web && npm run migrate
+
+pipeline-migrate: ## Bring the scraping pipeline's schema up to date (reads SCRAPER_DATABASE_URL)
+	uv run python -m scraper.pipeline migrate
+
+pipeline-revision: pipeline-migrate ## Write a migration from model changes: make pipeline-revision MSG="what changed" (then review it)
+	@test -n "$(MSG)" || (echo 'usage: make pipeline-revision MSG="what changed"'; exit 2)
+	uv run alembic -c src/scraper/pipeline/alembic.ini revision --autogenerate -m "$(MSG)"
+
+pipeline-run: ## Crawl one source once: make pipeline-run SOURCE=books_toscrape
+	uv run python -m scraper.pipeline run $(or $(SOURCE),books_toscrape)
 
 test: test-py test-web ## Run the Python and web tests
 

@@ -1,4 +1,4 @@
-"""`python -m scraper.pipeline run <source>` crawls one source once. `python -m scraper.pipeline list` names the sources."""
+"""`python -m scraper.pipeline run <source>` crawls one source once. `migrate` brings the database up to date. `list` names the sources."""
 
 import argparse
 import sys
@@ -6,8 +6,9 @@ import sys
 from scraper.config import load
 
 from .blobs import FilesystemBlobStore
+from .db import make_engine
+from .migrate import current_revision, upgrade
 from .runner import run_source
-from .schema import migrate
 from .sources import SPIDERS
 
 
@@ -15,7 +16,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m scraper.pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="name the available sources")
-    run = commands.add_parser("run", help="crawl one source once")
+    commands.add_parser("migrate", help="bring the pipeline schema up to date")
+    run = commands.add_parser("run", help="crawl one source once (migrates first)")
     run.add_argument("source", choices=sorted(SPIDERS))
     args = parser.parse_args(argv)
 
@@ -27,14 +29,15 @@ def main(argv: list[str] | None = None) -> int:
     if not cfg.database_url:
         print("Set SCRAPER_DATABASE_URL (see .env.example).", file=sys.stderr)
         return 2
-    from scraper.api.db import make_pool
-
-    pool = make_pool(cfg.database_url)
+    engine = make_engine(cfg.database_url)
     try:
-        migrate(pool)
-        finished = run_source(SPIDERS[args.source], pool, FilesystemBlobStore(cfg.pipeline_blob_dir))
+        upgrade(engine)
+        if args.command == "migrate":
+            print(f"pipeline schema at revision {current_revision(engine)}")
+            return 0
+        finished = run_source(SPIDERS[args.source], engine, FilesystemBlobStore(cfg.pipeline_blob_dir))
     finally:
-        pool.close()
+        engine.dispose()
     stats = finished.stats
     print(
         f"run {finished.id} {finished.status}: {stats.get('requests_count', 0)} requests, "

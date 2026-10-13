@@ -1,9 +1,11 @@
 """A whole run: a local site, a spider, the archive, the records."""
 
 import pytest
+from sqlalchemy import func, select
 
 from pipeline_support import book, local_books, serve, write_site
 from scraper.pipeline.blobs import FilesystemBlobStore
+from scraper.pipeline.models import FetchRow, RecordVersionRow
 from scraper.pipeline.runner import run_source
 from scraper.pipeline.uow import UnitOfWork
 
@@ -36,14 +38,14 @@ def test_a_run_stores_every_record_and_archives_every_page(pipeline, blobs, site
         assert uow.records.count(sid) == 5
         last = uow.records.current(sid, f"{base}/catalogue/book-5_5/index.html")
         assert last.data["price"] == "10.00" and last.data["in_stock"] is False and last.data["rating"] == 3
-        assert uow.fetches.conn.execute("SELECT count(*) FROM pipeline.fetch WHERE run_id = %s AND status = 200", (run.id,)).fetchone()[0] == 2
+        assert uow.session.scalar(select(func.count()).select_from(FetchRow).where(FetchRow.run_id == run.id, FetchRow.status == 200)) == 2
 
 
 def test_every_record_points_at_the_archived_page_it_was_parsed_from(pipeline, blobs, site):
     base, _ = site
     crawl(pipeline, blobs, base)
     with UnitOfWork(pipeline, blobs) as uow:
-        rows = uow.records.conn.execute("SELECT data->>'title', fetch_id FROM pipeline.record_version").fetchall()
+        rows = uow.session.execute(select(RecordVersionRow.data["title"].astext, RecordVersionRow.fetch_id)).all()
         assert len(rows) == 5
         for title, fetch_id in rows:
             assert f'title="{title}"'.encode() in uow.fetches.body(fetch_id)
@@ -56,7 +58,7 @@ def test_the_item_to_page_link_holds_when_many_pages_are_fetched_at_once(pipelin
         run = crawl(pipeline, blobs, base, pages=12, concurrent_requests=6)
     assert run.status == "completed" and run.stats["records_created"] == 36
     with UnitOfWork(pipeline, blobs) as uow:
-        rows = uow.records.conn.execute("SELECT data->>'title', fetch_id FROM pipeline.record_version").fetchall()
+        rows = uow.session.execute(select(RecordVersionRow.data["title"].astext, RecordVersionRow.fetch_id)).all()
         assert len(rows) == 36
         for title, fetch_id in rows:
             assert f'title="{title}"'.encode() in uow.fetches.body(fetch_id)
@@ -69,8 +71,8 @@ def test_running_again_on_an_unchanged_site_adds_no_versions_and_no_blobs(pipeli
     again = crawl(pipeline, blobs, base)
     assert again.stats["records_created"] == 0 and again.stats["records_changed"] == 0 and again.stats["records_unchanged"] == 5
     with UnitOfWork(pipeline, blobs) as uow:
-        assert uow.records.conn.execute("SELECT count(*) FROM pipeline.record_version").fetchone()[0] == 5
-        assert uow.records.conn.execute("SELECT count(*) FROM pipeline.fetch").fetchone()[0] >= 4  # both runs' fetches are kept
+        assert uow.session.scalar(select(func.count()).select_from(RecordVersionRow)) == 5
+        assert uow.session.scalar(select(func.count()).select_from(FetchRow)) >= 4  # both runs' fetches are kept
     assert sorted(p.name for p in blobs.root.rglob("*.zst")) == files_before  # identical bodies are stored once
 
 

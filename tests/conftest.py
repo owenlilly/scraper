@@ -32,15 +32,31 @@ def pg(pg_pool):
     return pg_pool
 
 
-@pytest.fixture
-def pipeline(pg_pool):
-    """The migrated pool with every pipeline table emptied."""
-    from scraper.pipeline.schema import TABLE_NAMES, migrate
+@pytest.fixture(scope="session")
+def pipeline_engine(pg_url):
+    """An engine on a `pipeline` schema built from nothing by the real migrations, so every test that uses it also tests them."""
+    from sqlalchemy import text
 
-    migrate(pg_pool)
-    with pg_pool.connection() as conn:
-        conn.execute("TRUNCATE " + ", ".join(f"pipeline.{name}" for name in TABLE_NAMES) + " RESTART IDENTITY")
-    return pg_pool
+    from scraper.pipeline.db import make_engine
+    from scraper.pipeline.migrate import upgrade
+
+    engine = make_engine(pg_url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA IF EXISTS pipeline CASCADE"))
+    upgrade(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def pipeline(pipeline_engine):
+    """The migrated engine with every pipeline table emptied."""
+    from scraper.pipeline.models import Base
+
+    with pipeline_engine.begin() as connection:
+        for table in reversed(Base.metadata.sorted_tables):  # children first, so no foreign key is broken
+            connection.execute(table.delete())
+    return pipeline_engine
 
 
 @pytest.fixture

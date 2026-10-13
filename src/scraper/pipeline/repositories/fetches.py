@@ -1,17 +1,18 @@
 from collections.abc import Mapping
 
-from psycopg import Connection
-from psycopg.types.json import Jsonb
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..blobs import FilesystemBlobStore
 from ..domain import FetchRef
+from ..models import FetchRow
 
 
 class FetchRepository:
     """The metadata row for each response, plus its body in the blob store."""
 
-    def __init__(self, conn: Connection, blobs: FilesystemBlobStore) -> None:
-        self.conn = conn
+    def __init__(self, session: Session, blobs: FilesystemBlobStore) -> None:
+        self.session = session
         self.blobs = blobs
 
     def save(
@@ -21,15 +22,16 @@ class FetchRepository:
         # The body is written first. If the transaction then rolls back, the blob is an orphan that costs a file, never a row
         # that points at nothing.
         sha256 = self.blobs.put(body)
-        row = self.conn.execute(
-            "INSERT INTO pipeline.fetch (run_id, url, final_url, status, headers, duration_ms, fetcher, blob_sha256, size) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (run_id, url, final_url, status, Jsonb(dict(headers)), duration_ms, fetcher, sha256, len(body)),
-        ).fetchone()
-        return FetchRef(row[0], sha256, len(body))
+        row = FetchRow(
+            run_id=run_id, url=url, final_url=final_url, status=status, headers=dict(headers), duration_ms=duration_ms,
+            fetcher=fetcher, blob_sha256=sha256, size=len(body),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return FetchRef(row.id, sha256, len(body))
 
     def body(self, fetch_id: int) -> bytes:
-        row = self.conn.execute("SELECT blob_sha256 FROM pipeline.fetch WHERE id = %s", (fetch_id,)).fetchone()
-        if row is None:
+        sha256 = self.session.scalar(select(FetchRow.blob_sha256).where(FetchRow.id == fetch_id))
+        if sha256 is None:
             raise KeyError(fetch_id)
-        return self.blobs.get(row[0])
+        return self.blobs.get(sha256)

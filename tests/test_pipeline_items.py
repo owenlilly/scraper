@@ -71,3 +71,9 @@ def test_the_blob_store_keeps_identical_bodies_once_and_returns_them_intact(tmp_
     files = [path for path in tmp_path.rglob("*") if path.is_file()]
     assert len(files) == 1 and files[0].stat().st_size < len(body)  # stored once, and compressed
     assert store.put(b"other") != first
+
+
+def test_a_nul_character_from_a_page_is_removed_because_postgres_cannot_store_it():
+    item = prepare(Book, ("url",), {**RAW, "title": "Bad\x00 title", "url": "https://x/\x00a"})
+    assert item.data["title"] == "Bad title" and item.natural_key == "https://x/a"
+    assert "\x00" not in item.data["url"]

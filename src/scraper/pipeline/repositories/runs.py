@@ -1,36 +1,40 @@
-from psycopg import Connection
-from psycopg.types.json import Jsonb
+from sqlalchemy import func, update
+from sqlalchemy.orm import Session
 
 from ..domain import Run
+from ..models import RunRow
 
-COLUMNS = "id, source_id, status, queued_at, started_at, finished_at, stats, error"
 FINISHED = ("completed", "paused", "failed")
 
 
+def _run(row: RunRow) -> Run:
+    return Run(row.id, row.source_id, row.status, row.queued_at, row.started_at, row.finished_at, row.stats, row.error)
+
+
 class RunRepository:
-    def __init__(self, conn: Connection) -> None:
-        self.conn = conn
+    def __init__(self, session: Session) -> None:
+        self.session = session
 
     def enqueue(self, source_id: int) -> Run:
-        row = self.conn.execute(f"INSERT INTO pipeline.run (source_id) VALUES (%s) RETURNING {COLUMNS}", (source_id,)).fetchone()
-        return Run(*row)
+        row = RunRow(source_id=source_id)
+        self.session.add(row)
+        self.session.flush()  # the server fills in the id, the status and the queued time
+        return _run(row)
 
     def start(self, run_id: int, worker_id: str) -> Run:
-        row = self.conn.execute(
-            f"UPDATE pipeline.run SET status = 'running', started_at = now(), worker_id = %s WHERE id = %s RETURNING {COLUMNS}",
-            (worker_id, run_id),
-        ).fetchone()
-        return Run(*row)
+        return self._update(run_id, status="running", started_at=func.now(), worker_id=worker_id)
 
     def finish(self, run_id: int, status: str, stats: dict, error: str | None = None) -> Run:
         if status not in FINISHED:
             raise ValueError(f"a run finishes as one of {FINISHED}, not {status!r}")
-        row = self.conn.execute(
-            f"UPDATE pipeline.run SET status = %s, finished_at = now(), stats = %s, error = %s WHERE id = %s RETURNING {COLUMNS}",
-            (status, Jsonb(stats), error, run_id),
-        ).fetchone()
-        return Run(*row)
+        return self._update(run_id, status=status, finished_at=func.now(), stats=stats, error=error)
 
     def get(self, run_id: int) -> Run | None:
-        row = self.conn.execute(f"SELECT {COLUMNS} FROM pipeline.run WHERE id = %s", (run_id,)).fetchone()
-        return Run(*row) if row else None
+        row = self.session.get(RunRow, run_id)
+        return _run(row) if row else None
+
+    def _update(self, run_id: int, **values) -> Run:
+        row = self.session.scalars(
+            update(RunRow).where(RunRow.id == run_id).values(**values).returning(RunRow).execution_options(populate_existing=True)
+        ).one()
+        return _run(row)

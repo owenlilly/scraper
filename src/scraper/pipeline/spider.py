@@ -8,9 +8,9 @@ from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ValidationError
 from scrapling.spiders import Spider
+from sqlalchemy import Engine
 
 from .blobs import FilesystemBlobStore
 from .domain import RecordItem, UpsertResult
@@ -27,7 +27,7 @@ _current_fetch: ContextVar[int | None] = ContextVar("pipeline_fetch_id", default
 
 @dataclass(frozen=True)
 class RunContext:
-    pool: ConnectionPool
+    engine: Engine
     blobs: FilesystemBlobStore
     source_id: int
     run_id: int
@@ -74,7 +74,7 @@ class SourceSpider(Spider):
 
     def _archive(self, response) -> int:
         requested = response.request.url if getattr(response, "request", None) else response.url
-        with UnitOfWork(self.ctx.pool, self.ctx.blobs) as uow:
+        with UnitOfWork(self.ctx.engine, self.ctx.blobs) as uow:
             ref = uow.fetches.save(
                 self.ctx.run_id, url=requested, final_url=response.url, status=response.status,
                 headers={str(k): str(v) for k, v in response.headers.items()}, body=response.body, fetcher="scrapling",
@@ -118,7 +118,7 @@ class SourceSpider(Spider):
             self._fail(f"writing {len(batch)} records: {error!r}")
 
     def _write(self, batch: list[RecordItem]) -> UpsertResult:
-        with UnitOfWork(self.ctx.pool, self.ctx.blobs) as uow:
+        with UnitOfWork(self.ctx.engine, self.ctx.blobs) as uow:
             return uow.records.upsert_batch(self.ctx.source_id, self.ctx.run_id, self.parser_version, batch)
 
     def _fail(self, message: str) -> None:
