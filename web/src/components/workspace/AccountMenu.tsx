@@ -65,9 +65,14 @@ export function AccountMenu({ person, usage, onDelete }: { person: Person; usage
           ) : null}
           <hr />
           {person.isAdmin ? (
-            <Link className="item" href="/admin">
-              Invitations and people
-            </Link>
+            <>
+              <Link className="item" href="/spiders">
+                Spiders
+              </Link>
+              <Link className="item" href="/admin">
+                Invitations and people
+              </Link>
+            </>
           ) : null}
           <SignOutButton className="item" />
           {onDelete ? (
