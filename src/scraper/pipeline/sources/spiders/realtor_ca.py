@@ -5,18 +5,21 @@ with no cards as blocked. It needs the browsers installed on the machine that ru
 
 import re
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urljoin
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from scrapling import Selector
 from scrapling.fetchers import AsyncStealthySession
 from scrapling.spiders import Response, SessionManager
 
+from ...settings import SpiderSettings
 from ...spider import SourceSpider
 
-MAX_PAGES = 3
+DEFAULT_PAGES = 3
+MAX_PAGES = DEFAULT_PAGES  # until Task 4 replaces its uses with the setting
 SITE = "https://www.realtor.ca"
+TEXT = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
 
 class Listing(BaseModel):
@@ -46,6 +49,38 @@ class Listing(BaseModel):
         return value
 
 
+class Location(BaseModel):
+    """A place to search, as realtor.ca knows it. The two values go together: one is the id the search uses, the other its name. The
+    formats are the site's, not ours, so they are not checked beyond being present and a sane length."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    geo_id: TEXT = Field(title="GeoId")
+    geo_name: TEXT = Field(title="GeoName")
+
+
+def _toronto() -> list[Location]:
+    return [Location(geo_id="g30_dpz89rm7", geo_name="Toronto, ON")]
+
+
+class RealtorSettings(SpiderSettings):
+    locations: list[Location] = Field(default_factory=_toronto, max_length=100, title="Locations")
+    max_pages: int = Field(default=DEFAULT_PAGES, ge=1, le=10, title="Pages per run")
+
+    @field_validator("locations")
+    @classmethod
+    def _one_to_one(cls, locations: list[Location]) -> list[Location]:
+        """Each GeoId belongs to one GeoName and each GeoName to one GeoId, so neither may repeat."""
+        for field_name, label in (("geo_id", "GeoId"), ("geo_name", "GeoName")):
+            first_seen: dict[str, int] = {}
+            for position, location in enumerate(locations, start=1):
+                value = getattr(location, field_name)
+                if value in first_seen:
+                    raise ValueError(f"Location {position} repeats the {label} of location {first_seen[value]}.")
+                first_seen[value] = position
+        return locations
+
+
 class RealtorSpider(SourceSpider):
     name = "realtor_ca"
     start_urls = ["https://www.realtor.ca/on/toronto/real-estate"]
@@ -53,6 +88,10 @@ class RealtorSpider(SourceSpider):
     item_schema = Listing
     natural_key = ("id",)
     parser_version = "1"
+    settings_model = RealtorSettings
+    locations_setting = "locations"
+    location_id_field = "geo_id"
+    location_label_field = "geo_name"
 
     next_url = 'https://www.realtor.ca/map#view=list&CurrentPage={page}&Sort=6-D&GeoIds=g30_dpz89rm7&GeoName=Toronto%2C%20ON&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=1&Currency=CAD'
 

@@ -10,9 +10,10 @@ from scrapling.spiders import Request, SessionManager
 from scrapling.engines.toolbelt.custom import Response
 
 from scraper.pipeline.items import prepare
+from scraper.pipeline.settings import SettingsInvalid, describe_form, load_settings
 from scraper.pipeline.sources import SPIDERS
 from scraper.pipeline.sources.spiders import realtor_ca
-from scraper.pipeline.sources.spiders.realtor_ca import MAX_PAGES, Listing, RealtorSpider
+from scraper.pipeline.sources.spiders.realtor_ca import MAX_PAGES, Listing, Location, RealtorSettings, RealtorSpider
 from scraper.pipeline.spider import RunContext, SourceSpider
 
 # A spider is built with a run context; parsing and block detection touch neither its database nor its blob store.
@@ -181,3 +182,57 @@ def test_every_page_session_skips_images_fonts_stylesheets_and_ads(monkeypatch):
     for options in created:
         assert options["disable_resources"] is True and options["block_ads"] is True
         assert options["headless"] is True and options["network_idle"] is True and options["solve_cloudflare"] is True
+
+
+def test_the_default_settings_are_toronto_and_three_pages():
+    settings = RealtorSettings()
+    assert [(place.geo_id, place.geo_name) for place in settings.locations] == [("g30_dpz89rm7", "Toronto, ON")]
+    assert settings.max_pages == 3
+
+
+def test_a_location_needs_both_values_trimmed_and_bounded():
+    for bad in ({"geo_id": "", "geo_name": "X"}, {"geo_id": "   ", "geo_name": "X"}, {"geo_id": "a", "geo_name": ""}, {"geo_id": "x" * 101, "geo_name": "X"}):
+        with pytest.raises(ValidationError):
+            Location(**bad)
+    kept = Location(geo_id="  g1  ", geo_name=" Ottawa, ON ")
+    assert (kept.geo_id, kept.geo_name) == ("g1", "Ottawa, ON")
+
+
+@pytest.mark.parametrize("odd", ["g30_dpz89rm7", "12345", "weird id with spaces & symbols #?", "ünïcode"])
+def test_no_geoid_format_is_enforced_because_the_format_is_not_ours(odd):
+    assert Location(geo_id=odd, geo_name="X").geo_id == odd
+
+
+def test_the_geoid_and_geoname_mapping_is_one_to_one():
+    place = lambda geo_id, geo_name: {"geo_id": geo_id, "geo_name": geo_name}
+    with pytest.raises(SettingsInvalid) as same_id:
+        load_settings(RealtorSpider, {"locations": [place("a", "A"), place("b", "B"), place("a", "C")]})
+    assert same_id.value.message == "locations: Location 3 repeats the GeoId of location 1."
+    with pytest.raises(SettingsInvalid) as same_name:
+        load_settings(RealtorSpider, {"locations": [place("a", "A"), place("b", "A")]})
+    assert same_name.value.message == "locations: Location 2 repeats the GeoName of location 1."
+
+
+def test_at_most_a_hundred_locations_and_none_is_allowed():
+    place = lambda n: {"geo_id": f"g{n}", "geo_name": f"City {n}"}
+    assert len(load_settings(RealtorSpider, {"locations": [place(n) for n in range(100)]}).locations) == 100
+    with pytest.raises(SettingsInvalid) as caught:
+        load_settings(RealtorSpider, {"locations": [place(n) for n in range(101)]})
+    assert caught.value.message.startswith("locations:")
+    assert load_settings(RealtorSpider, {"locations": []}).locations == []
+
+
+@pytest.mark.parametrize("pages, ok", [(0, False), (1, True), (10, True), (11, False)])
+def test_pages_per_run_is_one_to_ten(pages, ok):
+    if ok:
+        assert load_settings(RealtorSpider, {"max_pages": pages}).max_pages == pages
+    else:
+        with pytest.raises(SettingsInvalid):
+            load_settings(RealtorSpider, {"max_pages": pages})
+
+
+def test_the_form_description_names_the_locations_table_and_the_pages_field():
+    locations, pages = describe_form(RealtorSpider)
+    assert (locations["key"], locations["label"], locations["maxItems"]) == ("locations", "Locations", 100)
+    assert [(item["key"], item["label"], item["maxLength"]) for item in locations["items"]] == [("geo_id", "GeoId", 100), ("geo_name", "GeoName", 100)]
+    assert (pages["key"], pages["label"], pages["minimum"], pages["maximum"], pages["default"]) == ("max_pages", "Pages per run", 1, 10, 3)
