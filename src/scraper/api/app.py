@@ -9,14 +9,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from scraper.config import Config
+from scraper.pipeline.blobs import FilesystemBlobStore
+from scraper.pipeline.db import make_engine
+from scraper.pipeline.migrate import upgrade
 from scraper.llm import LMStudio, MistralAPI
 from scraper.usage import UsageStore
 
 from .auth import JWKSVerifier
 from .catalog import ModelCatalog
 from .db import make_pool, migrate, open_checkpointer
-from .deps import Deps
+from .deps import Deps, PipelineAccess
 from .errors import ApiError, api_error_handler, validation_error_handler
+from .pipeline import router as pipeline_router, runnable_spiders
 from .limits import BodyLimitMiddleware
 from .pgstore import PgUsageStore
 from .registry import RateLimiter, RunSlots, SessionRegistry
@@ -43,6 +47,10 @@ async def build_deps(cfg: Config, stack: AsyncExitStack) -> Deps:
     checkpointer = await open_checkpointer(cfg.database_url, stack)
     llms = make_llms(cfg)
     usage: UsageStore = PgUsageStore(pool)
+    engine = make_engine(cfg.database_url)
+    stack.callback(engine.dispose)
+    upgrade(engine)  # the pipeline's own schema, like `migrate(pool)` for `app`
+    pipeline = PipelineAccess(engine, FilesystemBlobStore(cfg.pipeline_blob_dir), runnable_spiders())
     return Deps(
         cfg=cfg,
         verifier=JWKSVerifier(cfg.jwks_url, cfg.jwt_issuer, cfg.jwt_audience),
@@ -51,6 +59,7 @@ async def build_deps(cfg: Config, stack: AsyncExitStack) -> Deps:
         limiter=RateLimiter(cfg.requests_per_minute),
         catalogs={key: ModelCatalog(client, cfg.allowed_model_list) for key, client in llms.items()},
         pool=pool,
+        pipeline=pipeline,
     )
 
 
@@ -100,4 +109,5 @@ def create_app(cfg: Config, deps: Deps | None = None) -> FastAPI:
 
     app.include_router(state_router)
     app.include_router(stream_router)
+    app.include_router(pipeline_router)
     return app

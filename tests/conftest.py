@@ -99,3 +99,31 @@ def _debug_log_off_again():
     from scraper.config import Config
 
     debuglog.configure(Config())
+
+
+@pytest.fixture
+def auth_users(pg_pool):
+    """The slice of the web app's `auth.user` table that the API reads, emptied. `add("alice", role="admin")` makes a person."""
+    with pg_pool.connection() as conn:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS auth")
+        conn.execute('CREATE TABLE IF NOT EXISTS auth."user" (id text PRIMARY KEY, role text, banned boolean)')
+        conn.execute('TRUNCATE auth."user"')
+
+    def add(user_id, *, role=None, banned=False):
+        with pg_pool.connection() as conn:
+            conn.execute('INSERT INTO auth."user" (id, role, banned) VALUES (%s, %s, %s)', (user_id, role, banned))
+
+    return add
+
+
+@pytest.fixture
+async def pipeline_api(pg, pipeline, blobs, auth_users):
+    """The API with the pipeline wired to the scratch pipeline schema and one spider, `books_toscrape`."""
+    from api_support import Harness
+    from scraper.api.deps import PipelineAccess
+    from scraper.pipeline.sources.books_toscrape import BooksToScrape
+
+    harness = Harness(pg, pipeline=PipelineAccess(pipeline, blobs, {"books_toscrape": BooksToScrape})).build()
+    harness.add_user = auth_users
+    yield harness
+    await harness.close()
