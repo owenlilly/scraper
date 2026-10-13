@@ -100,6 +100,8 @@ A new router, `/pipeline`, mounted next to the existing ones. Every route depend
 
 `require_admin` verifies the bearer token as `current_user` does, then reads `role` and `banned` from `auth."user"` for that id. The token carries only `sub` and stays that way, and a banned or demoted admin loses access at once instead of when the 15-minute token expires. A non-admin gets 403 `forbidden`, a missing or bad token 401, as elsewhere.
 
+The hosted setup deliberately gives the API's database role only the `app` schema, so that a bug in the API cannot read password hashes. The lookup therefore needs one narrow grant, added to `docs/hosted-deploy.md`: `GRANT USAGE ON SCHEMA auth TO scraper_api; GRANT SELECT (id, role, banned) ON auth."user" TO scraper_api;`. That exposes three columns of one table and nothing else (not emails, names, sessions or passwords). The pipeline's own tables live in a `pipeline` schema that the same role owns (`CREATE SCHEMA pipeline AUTHORIZATION scraper_api`), because the API and the worker run the pipeline's migrations at start-up.
+
 | Route | Result |
 |---|---|
 | `GET /pipeline/sources` | The names in `SPIDERS`, each with its latest run (creating missing `source` rows). |
@@ -141,7 +143,7 @@ Reuses the app's design system (tokens in `globals.css`, Literata for headings, 
 | Never run | "No runs yet. Run a trial first to check this spider against the site." |
 | API unreachable | The client's existing network error message, with a retry-in-place button |
 
-**Live behaviour.** TanStack Query polls `GET /pipeline/runs/{id}` and `fetches?after=` every 2 s while the selected run is `queued` or `running`, and stops when it finishes. The list refreshes on the same tick. Status changes are announced in an `aria-live="polite"` region, not each ledger row. The ledger shows the latest 200 rows.
+**Live behaviour.** TanStack Query polls `GET /pipeline/runs/{id}` and `fetches?after=` every 2 s while the selected run is `queued` or `running`, and stops when it finishes. The run list refreshes every 6 s, not every 2 s, so a page left open stays near 70 requests a minute, under the API's per-user limit of 120. Status changes are announced in an `aria-live="polite"` region, not each ledger row. The ledger shows the latest 200 rows.
 
 **Files.** `web/src/app/spiders/page.tsx`, `web/src/app/spiders/[name]/page.tsx`; `web/src/components/spiders/` (`SpiderList`, `SpiderPage`, `RunList`, `RunHeader`, `RunLedger`, `TrialResults`, `spiders.css`); `web/src/lib/spiders/` (`types.ts`, `queries.ts`, `derive.ts`). Before any page code, read `node_modules/next/dist/docs/` for the installed Next.js version, as `web/AGENTS.md` requires.
 
@@ -162,5 +164,5 @@ Web: Vitest for `derive.ts` (status labels, elapsed time, stale heartbeat, no-wo
 
 1. **Fetch duration.** Confirm whether Scrapling gives per-response timing to record in `fetch.duration_ms`; the ledger drops the column if not.
 2. **Realtor spider.** `SPIDERS` currently registers the uncommitted `RealtorSpider` (a plain Scrapling `Spider` named `demo`). It must become a `SourceSpider` named `realtor_ca` before it is runnable. This work builds and tests on `books_toscrape` and does not depend on it; until it is converted the API should list only classes that are `SourceSpider` subclasses.
-3. **Deployment.** Add a `worker` service to `compose.yaml` and the hosted-deploy notes.
+3. **Deployment.** Add a `worker` service to `compose.yaml`, the `pipeline` schema and the column grant above to the hosted-deploy notes, and change that page's check from `SELECT 1 FROM auth."user"` to `SELECT email FROM auth."user"`, which must still fail.
 4. **Thresholds.** The stale-heartbeat limit (60 s reap, 15 s warning) and the no-worker warning (30 s) are starting values; they become settings if they prove wrong.
