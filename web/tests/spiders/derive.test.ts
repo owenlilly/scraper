@@ -72,6 +72,7 @@ describe("counters", () => {
     expect(endNote(run({ kind: "trial", status: "completed", options: { max_requests: 5 }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap (5 requests).");
     expect(endNote(run({ status: "completed", options: { settings: { max_requests: 40 } }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap (40 requests).");
     expect(endNote(run({ status: "completed", stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap.");
+    expect(endNote(run({ kind: "trial", status: "completed", options: { max_requests: 1 }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap (1 request).");
     expect(endNote(run({ status: "completed" }))).toBeNull();
   });
 });

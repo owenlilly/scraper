@@ -90,6 +90,7 @@ function RecordsEditor({ field, value, onChange, problem }: { field: FormField; 
                       <input
                         type="text"
                         aria-label={`${item.label} of ${noun} ${row + 1}`}
+                        placeholder={item.label}
                         maxLength={item.maxLength ?? undefined}
                         value={String(record[item.key] ?? "")}
                         onChange={(event) => onChange(setCell(value, row, item.key, event.target.value))}

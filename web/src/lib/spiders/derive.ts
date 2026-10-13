@@ -85,7 +85,7 @@ export function endNote(run: Run): string | null {
   if (!run.stats.stopped_at_cap) return null;
   const saved = run.options.settings?.max_requests;
   const cap = run.kind === "trial" ? run.options.max_requests : typeof saved === "number" ? saved : undefined;
-  return cap ? `Stopped at the request cap (${cap} requests).` : "Stopped at the request cap.";
+  return cap ? `Stopped at the request cap (${cap} request${cap === 1 ? "" : "s"}).` : "Stopped at the request cap.";
 }
 
 export function statusTone(status: number): "ok" | "muted" | "bad" {

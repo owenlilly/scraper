@@ -126,3 +126,9 @@
   .sp-records td { display: block; border: 0; padding: 0 0.25rem; }
   .sp-records td.act { width: auto; }
 }
+
+/* The app's input styles cover text, email and password boxes only, so number boxes are styled to match here. */
+.sp-form input[type="number"] { width: 100%; border: 1px solid var(--rule); background: var(--surface); border-radius: var(--radius); padding: 0.42rem 0.65rem; color: var(--ink); transition: border-color 120ms ease, box-shadow 120ms ease; }
+.sp-form input[type="number"]:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.sp-form input[type="number"]::placeholder { color: var(--muted); opacity: 0.75; }
+.sp-field { align-content: start; } /* spare height must not be spread across the label's rows */
