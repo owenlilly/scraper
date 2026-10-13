@@ -28,3 +28,10 @@ class SourceRepository:
     def get(self, name: str) -> SourceConfig | None:
         row = self.session.scalars(select(SourceRow).where(SourceRow.name == name)).one_or_none()
         return _source(row) if row else None
+
+    def all(self) -> list[SourceConfig]:
+        return [_source(row) for row in self.session.scalars(select(SourceRow).order_by(SourceRow.name))]
+
+    def by_id(self, source_id: int) -> SourceConfig | None:
+        row = self.session.get(SourceRow, source_id)
+        return _source(row) if row else None

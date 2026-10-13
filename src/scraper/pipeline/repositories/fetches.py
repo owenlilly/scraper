@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..blobs import FilesystemBlobStore
-from ..domain import FetchRef
+from ..domain import FetchRef, FetchSummary
 from ..models import FetchRow
 
 
@@ -35,3 +35,13 @@ class FetchRepository:
         if sha256 is None:
             raise KeyError(fetch_id)
         return self.blobs.get(sha256)
+
+    def since(self, run_id: int, after_id: int = 0, limit: int = 200) -> list[FetchSummary]:
+        """The run's archived responses with an id above `after_id`, oldest first. The spiders page asks again with the last id it saw."""
+        rows = self.session.execute(
+            select(FetchRow.id, FetchRow.url, FetchRow.final_url, FetchRow.status, FetchRow.fetched_at, FetchRow.duration_ms, FetchRow.size)
+            .where(FetchRow.run_id == run_id, FetchRow.id > after_id)
+            .order_by(FetchRow.id)
+            .limit(limit)
+        )
+        return [FetchSummary(*row) for row in rows]
