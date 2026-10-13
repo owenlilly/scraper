@@ -127,3 +127,18 @@ async def pipeline_api(pg, pipeline, blobs, auth_users):
     harness.add_user = auth_users
     yield harness
     await harness.close()
+
+
+@pytest.fixture
+async def settings_api(pg, pipeline, blobs, auth_users):
+    """The API with both real spiders wired to the scratch pipeline schema, and an administrator called "boss"."""
+    from api_support import Harness
+    from scraper.api.deps import PipelineAccess
+    from scraper.pipeline.sources.books_toscrape import BooksToScrape
+    from scraper.pipeline.sources.spiders.realtor_ca import RealtorSpider
+
+    harness = Harness(pg, pipeline=PipelineAccess(pipeline, blobs, {"books_toscrape": BooksToScrape, "realtor_ca": RealtorSpider})).build()
+    auth_users("boss", role="admin")
+    auth_users("member")
+    yield harness
+    await harness.close()

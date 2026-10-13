@@ -34,7 +34,7 @@ async def test_only_an_active_administrator_gets_in(pipeline_api):
 async def test_the_spiders_are_listed_with_their_latest_run(admin):
     api, headers = admin
     listed = (await api.client.get("/pipeline/sources", headers=headers)).json()["sources"]
-    assert listed == [{"name": "books_toscrape", "latest_run": None}]
+    assert listed == [{"name": "books_toscrape", "latest_run": None, "locations": [], "trial_max_requests": 5}]
     run = (await start(api, headers)).json()
     listed = (await api.client.get("/pipeline/sources", headers=headers)).json()["sources"]
     assert listed[0]["latest_run"]["id"] == run["id"] and listed[0]["latest_run"]["status"] == "queued"
@@ -45,7 +45,8 @@ async def test_starting_a_run_queues_it_and_a_second_start_is_refused(admin):
     response = await start(api, headers)
     run = response.json()
     assert response.status_code == 201
-    assert (run["source"], run["kind"], run["status"], run["options"], run["retry_of"]) == ("books_toscrape", "live", "queued", {}, None)
+    assert (run["source"], run["kind"], run["status"], run["retry_of"]) == ("books_toscrape", "live", "queued", None)
+    assert "max_requests" not in run["options"] and "location" not in run["options"] and run["location"] is None
     assert run["queued_at"] and run["started_at"] is None and run["heartbeat_at"] is None
     again = await start(api, headers)
     assert again.status_code == 409 and error_code(again) == "source_busy"
@@ -54,9 +55,9 @@ async def test_starting_a_run_queues_it_and_a_second_start_is_refused(admin):
 async def test_a_trial_carries_its_cap_and_defaults_to_five(admin):
     api, headers = admin
     first = (await start(api, headers, kind="trial", max_requests=3)).json()
-    assert first["options"] == {"max_requests": 3}
+    assert first["options"]["max_requests"] == 3
     await api.client.post(f"/pipeline/runs/{first['id']}/stop", headers=headers)  # frees the source for the next one
-    assert (await start(api, headers, kind="trial")).json()["options"] == {"max_requests": 5}
+    assert (await start(api, headers, kind="trial")).json()["options"]["max_requests"] == 5
 
 
 @pytest.mark.parametrize("body", [{"kind": "trial", "max_requests": 0}, {"kind": "trial", "max_requests": 21}, {"kind": "live", "max_requests": 3}, {"kind": "odd"}, {"extra": 1}])
@@ -108,7 +109,7 @@ async def test_only_a_failed_or_stopped_run_can_be_retried_and_the_retry_points_
         uow.runs.finish(uow.runs.start(run["id"], "w").id, "failed", {}, "boom")
     retry = await api.client.post(f"/pipeline/runs/{run['id']}/retry", headers=headers)
     body = retry.json()
-    assert retry.status_code == 201 and body["retry_of"] == run["id"] and body["kind"] == "trial" and body["options"] == {"max_requests": 2}
+    assert retry.status_code == 201 and body["retry_of"] == run["id"] and body["kind"] == "trial" and body["options"]["max_requests"] == 2
     busy = await api.client.post(f"/pipeline/runs/{run['id']}/retry", headers=headers)
     assert busy.status_code == 409 and error_code(busy) == "source_busy"
 
