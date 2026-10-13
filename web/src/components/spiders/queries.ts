@@ -3,12 +3,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { ApiError } from "../../lib/api/client";
-import { isActive } from "../../lib/spiders/derive";
+import { pollFeedEvery, pollRunEvery, pollRunsEvery, pollSourcesEvery } from "../../lib/spiders/derive";
 import type { FetchRow, Run, SourceSummary } from "../../lib/spiders/types";
 import { useApi } from "../workspace/ApiProvider";
 
-export const POLL_RUN_MS = 2000;
-export const POLL_LIST_MS = 6000;
 const FETCH_PAGE = 200; // the API's page size: a full page means there may be more
 
 const keys = {
@@ -25,7 +23,7 @@ export function useSources() {
   return useQuery({
     queryKey: keys.sources,
     queryFn: async () => (await api.get<{ sources: SourceSummary[] }>("/pipeline/sources")).sources,
-    refetchInterval: (query) => (query.state.data?.some((source) => source.latest_run && isActive(source.latest_run.status)) ? POLL_LIST_MS : false),
+    refetchInterval: (query) => pollSourcesEvery(query.state.data),
   });
 }
 
@@ -34,7 +32,7 @@ export function useRuns(name: string) {
   return useQuery({
     queryKey: keys.runs(name),
     queryFn: async () => (await api.get<{ runs: Run[] }>(`/pipeline/sources/${encodeURIComponent(name)}/runs`)).runs,
-    refetchInterval: (query) => (query.state.data?.some((run) => isActive(run.status)) ? POLL_LIST_MS : false),
+    refetchInterval: (query) => pollRunsEvery(query.state.data),
   });
 }
 
@@ -45,7 +43,7 @@ export function useRun(id: number | null) {
     queryKey: keys.run(id),
     enabled: id !== null,
     queryFn: () => api.get<Run>(`/pipeline/runs/${id}`),
-    refetchInterval: (query) => (query.state.data && isActive(query.state.data.status) ? POLL_RUN_MS : false),
+    refetchInterval: (query) => pollRunEvery(query.state.data),
   });
 }
 
@@ -66,7 +64,7 @@ export function useFetchFeed(runId: number | null, active: boolean) {
       }
       return known;
     },
-    refetchInterval: active ? POLL_RUN_MS : false,
+    refetchInterval: pollFeedEvery(active),
   });
   const wasActive = useRef(active);
   const { refetch } = query;

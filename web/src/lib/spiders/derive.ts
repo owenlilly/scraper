@@ -1,6 +1,8 @@
 /** Everything the spiders page decides from a run, kept apart from the screens so it can be tested without a browser. */
-import type { Run, RunStatus } from "./types";
+import type { Run, RunStatus, SourceSummary } from "./types";
 
+export const POLL_RUN_MS = 2000;
+export const POLL_LIST_MS = 6000;
 export const NO_WORKER_AFTER_SECONDS = 30;
 export const STALE_BEAT_AFTER_SECONDS = 15;
 
@@ -98,3 +100,10 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** How often to ask again, or false for never. The polling rules live here, apart from the hooks, so they can be tested. */
+export const pollRunEvery = (run: Run | undefined): number | false => (run && isActive(run.status) ? POLL_RUN_MS : false);
+export const pollRunsEvery = (runs: Run[] | undefined): number | false => (runs?.some((run) => isActive(run.status)) ? POLL_LIST_MS : false);
+export const pollSourcesEvery = (sources: SourceSummary[] | undefined): number | false =>
+  sources?.some((source) => source.latest_run && isActive(source.latest_run.status)) ? POLL_LIST_MS : false;
+export const pollFeedEvery = (runIsActive: boolean): number | false => (runIsActive ? POLL_RUN_MS : false);

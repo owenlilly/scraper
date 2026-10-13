@@ -166,3 +166,17 @@ def test_sources_can_be_listed_and_found_by_id_and_the_fetch_feed_is_incremental
         assert [f.id for f in work.fetches.since(run.id, after_id=ids[0])] == ids[1:]
         assert [f.id for f in work.fetches.since(run.id, limit=2)] == ids[:2]
         assert work.fetches.since(run.id, after_id=ids[-1]) == []
+
+
+def test_a_run_the_reaper_failed_stays_failed_when_its_slow_process_finally_finishes(uow):
+    shop = source(uow)
+    with uow() as work:
+        run = work.runs.start(work.runs.enqueue(shop.id).id, "w")
+        work.session.execute(update(RunRow).where(RunRow.id == run.id).values(heartbeat_at=RunRow.heartbeat_at - timedelta(minutes=5)))
+    with uow() as work:
+        work.runs.reap_stale(timedelta(seconds=60))
+    with uow() as work:
+        late = work.runs.finish(run.id, "completed", {"requests_count": 99})
+    assert (late.status, late.error, late.stats) == ("failed", "worker lost", {})
+    with uow() as work:
+        assert work.runs.get(run.id).status == "failed"

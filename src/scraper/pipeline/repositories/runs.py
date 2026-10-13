@@ -95,9 +95,23 @@ class RunRepository:
         )
 
     def finish(self, run_id: int, status: str, stats: dict, error: str | None = None) -> Run:
+        """End a running run. A run that is no longer running (the reaper failed it, or it was stopped while queued) is left as it
+        is and returned: a slow process finishing late must not undo that, or hide that a newer run has since started."""
         if status not in FINISHED:
             raise ValueError(f"a run finishes as one of {FINISHED}, not {status!r}")
-        return self._update(run_id, status=status, finished_at=func.now(), stats=stats, error=error)
+        row = self.session.scalars(
+            update(RunRow)
+            .where(RunRow.id == run_id, RunRow.status == "running")
+            .values(status=status, finished_at=func.now(), stats=stats, error=error)
+            .returning(RunRow)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if row is not None:
+            return _run(row)
+        current = self.get(run_id)
+        if current is None:
+            raise LookupError(f"there is no run {run_id}")
+        return current
 
     def get(self, run_id: int) -> Run | None:
         row = self.session.get(RunRow, run_id)

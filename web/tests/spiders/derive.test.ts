@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, canRetry, canStop, counters, duration, elapsed, endNote, formatBytes, isActive, isStopping, statusLabel, statusTone, workerNotice } from "../../src/lib/spiders/derive";
+import { POLL_LIST_MS, POLL_RUN_MS, ago, canRetry, canStop, counters, duration, elapsed, endNote, formatBytes, isActive, isStopping, pollFeedEvery, pollRunEvery, pollRunsEvery, pollSourcesEvery, statusLabel, statusTone, workerNotice } from "../../src/lib/spiders/derive";
 import type { Run } from "../../src/lib/spiders/types";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
@@ -77,4 +77,28 @@ describe("counters", () => {
 describe("the ledger", () => {
   it.each([[200, "ok"], [204, "ok"], [301, "muted"], [404, "bad"], [429, "bad"], [503, "bad"], [0, "bad"]])("status %s is %s", (code, tone) => expect(statusTone(code)).toBe(tone));
   it.each([[0, "0 B"], [900, "900 B"], [2048, "2.0 KB"], [5 * 1024 * 1024, "5.0 MB"]])("%s bytes is %s", (n, text) => expect(formatBytes(n)).toBe(text));
+});
+
+describe("polling", () => {
+  it("polls a run every two seconds while it is queued or running, and stops once it has ended", () => {
+    expect(pollRunEvery(run({ status: "queued" }))).toBe(POLL_RUN_MS);
+    expect(pollRunEvery(run({ status: "running" }))).toBe(POLL_RUN_MS);
+    for (const status of ["completed", "paused", "failed", "cancelled"] as const) expect(pollRunEvery(run({ status }))).toBe(false);
+    expect(pollRunEvery(undefined)).toBe(false); // nothing loaded yet: the first fetch is not a poll
+    expect(POLL_RUN_MS).toBe(2000);
+  });
+  it("polls the history and the list every six seconds only while something in them is in flight", () => {
+    expect(pollRunsEvery([run({ status: "completed" }), run({ id: 8, status: "running" })])).toBe(POLL_LIST_MS);
+    expect(pollRunsEvery([run({ status: "completed" }), run({ id: 6, status: "failed" })])).toBe(false);
+    expect(pollRunsEvery([])).toBe(false);
+    expect(pollRunsEvery(undefined)).toBe(false);
+    expect(pollSourcesEvery([{ name: "a", latest_run: null }, { name: "b", latest_run: run({ status: "queued" }) }])).toBe(POLL_LIST_MS);
+    expect(pollSourcesEvery([{ name: "a", latest_run: null }, { name: "b", latest_run: run({ status: "paused" }) }])).toBe(false);
+    expect(pollSourcesEvery(undefined)).toBe(false);
+    expect(POLL_LIST_MS).toBe(6000);
+  });
+  it("polls the page feed only while its run is in flight", () => {
+    expect(pollFeedEvery(true)).toBe(POLL_RUN_MS);
+    expect(pollFeedEvery(false)).toBe(false);
+  });
 });

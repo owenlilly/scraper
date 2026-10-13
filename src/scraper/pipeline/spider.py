@@ -4,6 +4,7 @@ A source author writes `parse` and declares the item schema; this class does the
 everything is written through repositories, in worker threads so the crawl's event loop never waits on the database."""
 
 import asyncio
+import signal
 import threading
 from collections import Counter
 from contextvars import ContextVar
@@ -75,6 +76,10 @@ class SourceSpider(Spider):
         self.write_error: str | None = None
         self.trial = ctx.kind == "trial"
         self.trial_requests = int(ctx.options.get("max_requests", TRIAL_DEFAULT_REQUESTS))
+        if self.trial:
+            # The cap is checked as each response arrives, by which time Scrapling has started as many requests as it may run at
+            # once. One at a time makes the cap mean what the page says it means, on a live site.
+            self.concurrent_requests = 1
         self.stopped_at_cap = False
         self.pause_was_requested = False
         self._trial_items: list[dict] = []
@@ -111,12 +116,32 @@ class SourceSpider(Spider):
         with self._stop_lock:
             if self._stop_asked:
                 return True
+            if getattr(self._engine, "_pause_requested", False):
+                self._stop_asked = True  # a Ctrl+C or a worker shutdown already paused it; asking again would be a force stop
+                return True
             try:
                 self.pause()
             except RuntimeError:
                 return False
             self._stop_asked = True
             return True
+
+    def _setup_signal_handler(self) -> None:
+        """Scrapling's own handler passes every SIGINT to the engine, and a second one is a force stop that drops in-flight
+        responses. When a stop from the page, the trial cap or a storage failure is already draining, a SIGINT (the worker being
+        restarted, say) must not become that second request. Otherwise this is Scrapling's handler."""
+
+        def handler(_signum, _frame) -> None:
+            if self._engine is None:
+                raise KeyboardInterrupt
+            if self._stop_asked:
+                return
+            self._engine.request_pause()
+
+        try:
+            self._original_sigint_handler = signal.signal(signal.SIGINT, handler)
+        except ValueError:  # not the main thread
+            self._original_sigint_handler = None
 
     def snapshot(self) -> dict:
         """The numbers so far, for a heartbeat thread. A counter may change while it is copied; then the last good copy stands."""

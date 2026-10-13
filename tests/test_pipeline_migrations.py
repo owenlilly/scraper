@@ -1,5 +1,9 @@
 """The migrations are the only thing that creates the schema, so they are tested as hard as the code that uses it."""
 
+import os
+import subprocess
+import sys
+
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
@@ -94,3 +98,16 @@ def test_a_finished_run_does_not_block_a_new_one_and_new_columns_have_defaults(s
     with scratch.connect() as connection:
         row = connection.execute(text("SELECT kind, retry_of, requested_by, heartbeat_at, cancel_requested, options FROM pipeline.run ORDER BY id DESC LIMIT 1")).one()
     assert tuple(row) == ("live", None, None, None, False, {})
+
+
+def test_several_processes_migrating_a_fresh_database_at_once_all_succeed(scratch, pg_url):
+    """The API and the worker both bring the schema up to date when they start, and on a fresh volume they start together.
+    Separate processes, because Alembic's environment is global to a process."""
+    with scratch.begin() as connection:
+        connection.execute(text("DROP SCHEMA IF EXISTS pipeline CASCADE"))
+    env = {**os.environ, "SCRAPER_DATABASE_URL": pg_url}
+    command = [sys.executable, "-m", "scraper.pipeline", "migrate"]
+    processes = [subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) for _ in range(4)]
+    outputs = [(process.communicate(timeout=120)[0], process.returncode) for process in processes]
+    assert [code for _, code in outputs] == [0, 0, 0, 0], outputs
+    assert current_revision(scratch) == ScriptDirectory.from_config(alembic_config()).get_current_head()
