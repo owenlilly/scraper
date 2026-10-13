@@ -8,7 +8,10 @@ FINISHED = ("completed", "paused", "failed")
 
 
 def _run(row: RunRow) -> Run:
-    return Run(row.id, row.source_id, row.status, row.queued_at, row.started_at, row.finished_at, row.stats, row.error)
+    return Run(
+        row.id, row.source_id, row.status, row.queued_at, row.started_at, row.finished_at, row.stats, row.error,
+        row.kind, row.retry_of, row.requested_by, row.heartbeat_at, row.cancel_requested, row.options,
+    )
 
 
 class RunRepository:

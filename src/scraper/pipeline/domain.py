@@ -23,12 +23,31 @@ class Run:
     finished_at: datetime | None = None
     stats: dict = field(default_factory=dict)
     error: str | None = None
+    kind: str = "live"
+    retry_of: int | None = None
+    requested_by: str | None = None
+    heartbeat_at: datetime | None = None
+    cancel_requested: bool = False
+    options: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class FetchRef:
     id: int
     sha256: str
+    size: int
+
+
+@dataclass(frozen=True)
+class FetchSummary:
+    """One archived response as the spiders page lists it: no body, no headers."""
+
+    id: int
+    url: str
+    final_url: str
+    status: int
+    fetched_at: datetime
+    duration_ms: int | None
     size: int
 
 
