@@ -13,11 +13,29 @@ from scraper.pipeline.items import prepare
 from scraper.pipeline.settings import SettingsInvalid, describe_form, load_settings
 from scraper.pipeline.sources import SPIDERS
 from scraper.pipeline.sources.spiders import realtor_ca
-from scraper.pipeline.sources.spiders.realtor_ca import MAX_PAGES, Listing, Location, RealtorSettings, RealtorSpider
+from scraper.pipeline.sources.spiders.realtor_ca import DEFAULT_PAGES, Listing, Location, RealtorSettings, RealtorSpider
 from scraper.pipeline.spider import RunContext, SourceSpider
 
 # A spider is built with a run context; parsing and block detection touch neither its database nor its blob store.
 CTX = RunContext(engine=None, blobs=None, source_id=1, run_id=1)
+
+
+def toronto(page: int) -> str:
+    return (
+        "https://www.realtor.ca/map#view=list&CurrentPage=%d&Sort=6-D&GeoIds=g30_dpz89rm7&GeoName=Toronto%%2C%%20ON"
+        "&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=1&Currency=CAD" % page
+    )
+
+
+def located(location: dict | None = None, **settings) -> RunContext:
+    return RunContext(engine=None, blobs=None, source_id=1, run_id=1, settings=RealtorSettings(**settings), location=location)
+
+
+def starts(spider) -> list:
+    async def run():
+        return [request async for request in spider.start_requests()]
+
+    return asyncio.run(run())
 
 CARD = """<div class="listingCard">
   <a class="listingDetailsLink" href="/real-estate/{n}/listing-{n}">
@@ -52,9 +70,10 @@ def spider():
     return RealtorSpider(ctx=CTX)
 
 
-def test_the_spider_declares_its_site_and_start_page(spider):
+def test_the_spider_declares_its_site_and_starts_from_the_first_page_of_its_location(spider):
     assert spider.allowed_domains == {"realtor.ca"}
-    assert spider.start_urls == ["https://www.realtor.ca/on/toronto/real-estate"]
+    (first,) = starts(spider)
+    assert first.url == toronto(1) and first.sid == "stealth1" and first.meta == {"page": 1}
 
 
 def test_each_card_becomes_one_listing_dict(spider):
@@ -82,18 +101,18 @@ def test_a_page_follows_to_the_next_page_through_that_pages_own_session(spider):
 
 
 def test_paging_stops_at_max_pages(spider):
-    assert [out for out in collect(spider, page(2, current=MAX_PAGES)) if isinstance(out, Request)] == []
+    assert [out for out in collect(spider, page(2, current=DEFAULT_PAGES)) if isinstance(out, Request)] == []
 
 
 def test_every_page_up_to_max_pages_has_a_session_and_no_page_shares_one():
     manager = SessionManager()
     RealtorSpider(ctx=CTX).configure_sessions(manager)
-    assert [f"stealth{n}" for n in range(1, MAX_PAGES + 1)] == sorted(manager.session_ids)
-    assert len(manager.session_ids) == MAX_PAGES
+    assert [f"stealth{n}" for n in range(1, DEFAULT_PAGES + 1)] == sorted(manager.session_ids)
+    assert len(manager.session_ids) == DEFAULT_PAGES
 
 
 def test_page_urls_differ_only_in_the_fragment_so_fingerprints_must_keep_it(spider):
-    first, second = (Request(spider.next_url.format(page=n)) for n in (2, 3))
+    first, second = (Request(spider.page_url(n)) for n in (2, 3))
     assert spider.fp_keep_fragments is True
     assert first.update_fingerprint(keep_fragments=True) != second.update_fingerprint(keep_fragments=True)
 
@@ -178,7 +197,7 @@ def test_every_page_session_skips_images_fonts_stylesheets_and_ads(monkeypatch):
 
     monkeypatch.setattr(realtor_ca, "AsyncStealthySession", Recorder)
     RealtorSpider(ctx=CTX)  # building a spider configures its sessions
-    assert len(created) == MAX_PAGES
+    assert len(created) == DEFAULT_PAGES
     for options in created:
         assert options["disable_resources"] is True and options["block_ads"] is True
         assert options["headless"] is True and options["network_idle"] is True and options["solve_cloudflare"] is True
@@ -236,3 +255,39 @@ def test_the_form_description_names_the_locations_table_and_the_pages_field():
     assert (locations["key"], locations["label"], locations["maxItems"]) == ("locations", "Locations", 100)
     assert [(item["key"], item["label"], item["maxLength"]) for item in locations["items"]] == [("geo_id", "GeoId", 100), ("geo_name", "GeoName", 100)]
     assert (pages["key"], pages["label"], pages["minimum"], pages["maximum"], pages["default"]) == ("max_pages", "Pages per run", 1, 10, 3)
+
+
+def test_the_default_run_builds_exactly_the_addresses_it_always_did():
+    spider = RealtorSpider(ctx=CTX)
+    assert spider.page_url(1) == toronto(1) and spider.page_url(2) == toronto(2)
+
+
+def test_a_locations_values_are_url_encoded_and_cannot_change_the_rest_of_the_address():
+    place = {"geo_id": "g1&Sort=1#x/y%z", "geo_name": "Saint-Jean, QC & co/ünï"}
+    url = RealtorSpider(ctx=located(place)).page_url(2)
+    assert "GeoIds=g1%26Sort%3D1%23x%2Fy%25z&GeoName=Saint-Jean%2C%20QC%20%26%20co%2F%C3%BCn%C3%AF&" in url
+    assert url.startswith("https://www.realtor.ca/map#view=list&CurrentPage=2&Sort=6-D&GeoIds=")
+    assert url.count("#") == 1 and url.count("&Sort=") == 1 and url.endswith("&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=1&Currency=CAD")
+
+
+def test_the_run_crawls_its_own_location_from_the_first_page_to_the_next():
+    ottawa = {"geo_id": "g2_abc", "geo_name": "Ottawa, ON"}
+    spider = RealtorSpider(ctx=located(ottawa))
+    (first,) = starts(spider)
+    assert "GeoIds=g2_abc&GeoName=Ottawa%2C%20ON" in first.url
+    follow = [out for out in collect(spider, page(2, current=1)) if isinstance(out, Request)]
+    assert len(follow) == 1 and "CurrentPage=2" in follow[0].url and "GeoIds=g2_abc" in follow[0].url
+
+
+def test_pages_per_run_sets_how_many_sessions_open_and_where_paging_stops(monkeypatch):
+    created = []
+
+    class Recorder:
+        def __init__(self, **options):
+            created.append(options)
+
+    monkeypatch.setattr(realtor_ca, "AsyncStealthySession", Recorder)
+    spider = RealtorSpider(ctx=located(None, max_pages=5))
+    assert len(created) == 5
+    assert [out for out in collect(spider, page(2, current=4)) if isinstance(out, Request)][0].meta["page"] == 5
+    assert [out for out in collect(spider, page(2, current=5)) if isinstance(out, Request)] == []

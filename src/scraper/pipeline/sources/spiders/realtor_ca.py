@@ -6,18 +6,17 @@ with no cards as blocked. It needs the browsers installed on the machine that ru
 import re
 from decimal import Decimal
 from typing import Annotated, Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from scrapling import Selector
 from scrapling.fetchers import AsyncStealthySession
-from scrapling.spiders import Response, SessionManager
+from scrapling.spiders import Request, Response, SessionManager
 
 from ...settings import SpiderSettings
 from ...spider import SourceSpider
 
 DEFAULT_PAGES = 3
-MAX_PAGES = DEFAULT_PAGES  # until Task 4 replaces its uses with the setting
 SITE = "https://www.realtor.ca"
 TEXT = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
@@ -83,7 +82,6 @@ class RealtorSettings(SpiderSettings):
 
 class RealtorSpider(SourceSpider):
     name = "realtor_ca"
-    start_urls = ["https://www.realtor.ca/on/toronto/real-estate"]
     allowed_domains = {"realtor.ca"}
     item_schema = Listing
     natural_key = ("id",)
@@ -93,7 +91,10 @@ class RealtorSpider(SourceSpider):
     location_id_field = "geo_id"
     location_label_field = "geo_name"
 
-    next_url = 'https://www.realtor.ca/map#view=list&CurrentPage={page}&Sort=6-D&GeoIds=g30_dpz89rm7&GeoName=Toronto%2C%20ON&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=1&Currency=CAD'
+    next_url = (
+        "https://www.realtor.ca/map#view=list&CurrentPage={page}&Sort=6-D&GeoIds={geo_id}&GeoName={geo_name}"
+        "&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=1&Currency=CAD"
+    )
 
     # Not decided yet whether this spider honours realtor.ca's robots.txt, so for now it neither fetches nor consults it. (The pipeline's
     # default is to obey; with this off Scrapling also ignores any crawl-delay the file would set, leaving only the autothrottle.)
@@ -104,12 +105,21 @@ class RealtorSpider(SourceSpider):
     # A retry reuses the already-used session, which realtor.ca blocks, so retrying is pointless.
     max_blocked_retries = 1
 
+    def page_url(self, page: int) -> str:
+        """The address of results page `page` for this run's location. Both values are encoded so that nothing in them can change the
+        rest of the address; with no location (a spider built without one) it is the default, Toronto."""
+        place = self.location or RealtorSettings().locations[0].model_dump()
+        return self.next_url.format(page=page, geo_id=quote(place["geo_id"], safe=""), geo_name=quote(place["geo_name"], safe=""))
+
+    async def start_requests(self):
+        yield Request(self.page_url(1), sid="stealth1", wait_selector=".listingCard", meta={"page": 1})
+
     def configure_sessions(self, manager: SessionManager):
         # realtor.ca blocks the search API on any 2nd navigation within the same browser session,
         # so each page gets its own session (page N is fetched through "stealth{N}").
         # No images, fonts, stylesheets or ads: realtor.ca's page does not fire the browser's load event in reasonable time while it
         # fetches them (60 s timeout, then a retry: about three minutes a page). The cards and their image addresses are in the HTML.
-        for page in range(1, MAX_PAGES + 1):
+        for page in range(1, self.settings.max_pages + 1):
             manager.add(
                 f"stealth{page}",
                 AsyncStealthySession(headless=True, network_idle=True, solve_cloudflare=True, disable_resources=True, block_ads=True),
@@ -125,8 +135,8 @@ class RealtorSpider(SourceSpider):
         for item in response.css('.listingCard'):
             yield self._extract_listing_card(item)
 
-        if page < MAX_PAGES:
-            yield response.follow(self.next_url.format(page=page + 1), sid=f"stealth{page + 1}",
+        if page < self.settings.max_pages:
+            yield response.follow(self.page_url(page + 1), sid=f"stealth{page + 1}",
                                   wait_selector='.listingCard', callback=self.parse, meta={'page': page + 1})
 
     @staticmethod
