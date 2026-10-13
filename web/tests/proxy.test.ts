@@ -21,7 +21,7 @@ describe("hasSessionCookie", () => {
 
 describe("proxy", () => {
   it("sends a visitor with no session cookie from the workspace and the admin page to sign in", () => {
-    for (const path of ["/", "/admin"]) {
+    for (const path of ["/", "/admin", "/spiders", "/spiders/books_toscrape"]) {
       const response = proxy(request(path));
       expect(response.status, path).toBe(307);
       expect(new URL(response.headers.get("location")!).pathname).toBe("/sign-in");
@@ -35,6 +35,6 @@ describe("proxy", () => {
   });
 
   it("only guards the pages that need a session", () => {
-    expect(config.matcher).toEqual(["/", "/admin/:path*"]);
+    expect(config.matcher).toEqual(["/", "/admin/:path*", "/spiders/:path*"]);
   });
 });

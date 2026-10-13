@@ -20,10 +20,18 @@ CREATE ROLE scraper_web LOGIN PASSWORD 'change-me-too';
 GRANT CONNECT ON DATABASE scraper TO scraper_api, scraper_web;
 CREATE SCHEMA app AUTHORIZATION scraper_api;
 CREATE SCHEMA auth AUTHORIZATION scraper_web;
+CREATE SCHEMA pipeline AUTHORIZATION scraper_api;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ```
 
-The API creates its own tables on start-up (the LangGraph checkpoint tables included). The web app creates the `auth` tables with Better Auth's migration. Check the separation at any time: connected as `scraper_api`, `SELECT 1 FROM auth."user"` must fail with `permission denied for schema auth`.
+The API creates its own tables on start-up (the LangGraph checkpoint tables included) and brings the `pipeline` schema up to date. The web app creates the `auth` tables with Better Auth's migration. The spiders page needs the API to know whether someone is an administrator, so once the web app's first migration has created `auth."user"`, give the API role exactly three columns of it and nothing else:
+
+```sql
+GRANT USAGE ON SCHEMA auth TO scraper_api;
+GRANT SELECT (id, role, banned) ON auth."user" TO scraper_api;
+```
+
+Check the separation at any time: connected as `scraper_api`, `SELECT email FROM auth."user"` must fail with `permission denied for table user`, and so must any read of `auth.account` (where password hashes live).
 
 ## 2. Settings
 
@@ -141,3 +149,12 @@ The first administrator: set `ADMIN_EMAIL` and sign up with that address. It nee
 - **A token outlives the account for up to 15 minutes.** After someone is banned or deleted, a token they already hold still passes the API's check until it expires. A ban ends their sessions at once so they cannot get a new token, and deletion erases the API's data first, but a token in hand could create an empty session row again in that window. It holds no data.
 - **Response timing can show whether an address has an account.** Password reset sends its email before answering, so a request for a real address takes longer than one for an unknown address. The responses are identical; the timing is not hidden.
 - **An invitation link is a credential.** Anyone who holds the link can set the password for that address (and the confirmation email then goes to the real owner). Treat it like a password reset link.
+
+## The spiders worker
+
+The spiders page (`/spiders`, administrators only) queues runs; a separate worker process runs them. Without a worker a run stays queued, and the page says how to start one after 30 seconds.
+
+- Start it with the API's environment: `python -m scraper.pipeline worker` (`make pipeline-worker` locally). `--concurrency N` runs up to N sources at once; a source never has two runs at the same time.
+- It needs `SCRAPER_DATABASE_URL` and `SCRAPER_PIPELINE_BLOB_DIR`, a directory it can write (every fetched page is archived there, compressed). The API only reads the database, so it needs no blob directory. Run one worker per blob directory; the compose file mounts a volume at `/data/blobs`.
+- Each run is a child process of the worker. Stopping the worker (SIGTERM or Ctrl+C) asks every run to stop, which ends them as stopped with what they saved. The worker waits up to 30 seconds for that, so give your process manager longer than that before it kills the container (compose sets `stop_grace_period: 45s`); a run killed before it finishes is failed as `worker lost`. A run caught in its first moments, before it has started crawling, ends as failed instead of stopped. A worker or child that dies without finishing leaves a run that the next worker pass fails as `worker lost` after 60 seconds without a heartbeat.
+- A browser-backed spider (`AsyncStealthySession`) needs the browsers installed on the worker host (`scrapling install`). The container image does not include them.

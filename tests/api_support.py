@@ -23,7 +23,7 @@ MODEL = "qwen-test"
 class Harness:
     """The whole API on a real Postgres, with a scripted model, a fake web and a throwaway identity provider."""
 
-    def __init__(self, pg, url_check=None, **cfg_overrides):
+    def __init__(self, pg, url_check=None, pipeline=None, **cfg_overrides):
         self.signer = Signer("k1")
         self.idp = JWKSServer(self.signer)
         self.cfg = Config(
@@ -34,6 +34,7 @@ class Harness:
                            models=[ModelInfo(MODEL, "llm", True, 100_000), ModelInfo("other-model", "llm", True, 100_000)])
         self.model = ScriptedChat()
         self.pool = pg
+        self.pipeline = pipeline
         self.url_check = url_check or (lambda url: None)
         self.web = dict(WEB)
         self.before_fetch = None  # a test may set this to run (or block) inside the fake fetch
@@ -53,7 +54,7 @@ class Harness:
             cfg=self.cfg, verifier=JWKSVerifier(self.idp.url, ISSUER, AUDIENCE), registry=registry,
             slots=RunSlots(self.cfg.max_concurrent_runs), limiter=RateLimiter(self.cfg.requests_per_minute),
             catalogs={k: ModelCatalog(v, self.cfg.allowed_model_list) for k, v in (getattr(self, "llms", None) or {self.llm.key: self.llm}).items()},
-            pool=self.pool,
+            pool=self.pool, pipeline=self.pipeline,
         )
         self.app = create_app(self.cfg, self.deps)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://api.test")

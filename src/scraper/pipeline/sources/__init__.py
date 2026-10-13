@@ -2,5 +2,6 @@
 
 from ..spider import SourceSpider
 from .books_toscrape import BooksToScrape
+from .spiders.realtor_ca import RealtorSpider
 
-SPIDERS: dict[str, type[SourceSpider]] = {spider.name: spider for spider in (BooksToScrape,)}
+SPIDERS: dict[str, type[SourceSpider]] = {spider.name: spider for spider in (BooksToScrape, RealtorSpider)}

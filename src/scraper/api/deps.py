@@ -4,13 +4,25 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Request
 from psycopg_pool import ConnectionPool
+from sqlalchemy import Engine
 
 from scraper.config import Config
+from scraper.pipeline.blobs import FilesystemBlobStore
+from scraper.pipeline.spider import SourceSpider
 
 from .auth import AuthError, AuthUnavailable, JWKSVerifier
 from .catalog import ModelCatalog
 from .errors import ApiError
 from .registry import Entry, RateLimited, RateLimiter, RunSlots, SessionRegistry
+
+
+@dataclass
+class PipelineAccess:
+    """What the spiders page's routes need: the pipeline's database, its blob store, and the spiders that can run."""
+
+    engine: Engine
+    blobs: FilesystemBlobStore
+    spiders: dict[str, type[SourceSpider]]
 
 
 @dataclass
@@ -22,6 +34,7 @@ class Deps:
     limiter: RateLimiter
     catalogs: dict[str, ModelCatalog]  # one per provider people may choose
     pool: ConnectionPool
+    pipeline: PipelineAccess | None = None
 
     def catalog_for(self, provider: str) -> ModelCatalog:
         return self.catalogs[provider]

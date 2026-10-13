@@ -1,7 +1,7 @@
 # Common tasks. Run `make` to list them. Containers use Podman.
 .DEFAULT_GOAL := help
 MAIL_NAME ?= scraper-mailpit
-.PHONY: debug-log help install api web mail mail-stop migrate pipeline-migrate pipeline-revision pipeline-run test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
+.PHONY: debug-log help install api web mail mail-stop migrate pipeline-migrate pipeline-revision pipeline-run pipeline-worker test test-py test-web typecheck e2e e2e-ui test-db test-db-stop up down logs
 
 # Scratch databases for the tests. `make test-db` starts a Postgres that has all three. Override any of these to use your own;
 # each database's schemas are dropped and recreated, so never point them at data you want to keep.
@@ -42,6 +42,9 @@ pipeline-revision: pipeline-migrate ## Write a migration from model changes: mak
 
 pipeline-run: ## Crawl one source once: make pipeline-run SOURCE=books_toscrape
 	uv run python -m scraper.pipeline run $(or $(SOURCE),books_toscrape)
+
+pipeline-worker: ## Run queued spider runs (what the spiders page starts): make pipeline-worker CONCURRENCY=2
+	uv run python -m scraper.pipeline worker --concurrency $(or $(CONCURRENCY),1)
 
 test: test-py test-web ## Run the Python and web tests
 

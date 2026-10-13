@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -28,3 +28,17 @@ class SourceRepository:
     def get(self, name: str) -> SourceConfig | None:
         row = self.session.scalars(select(SourceRow).where(SourceRow.name == name)).one_or_none()
         return _source(row) if row else None
+
+    def all(self) -> list[SourceConfig]:
+        return [_source(row) for row in self.session.scalars(select(SourceRow).order_by(SourceRow.name))]
+
+    def by_id(self, source_id: int) -> SourceConfig | None:
+        row = self.session.get(SourceRow, source_id)
+        return _source(row) if row else None
+
+    def set_settings(self, source_id: int, settings: dict) -> SourceConfig:
+        """Replace the saved settings. The only writer: the API validates before calling it."""
+        row = self.session.scalars(
+            update(SourceRow).where(SourceRow.id == source_id).values(settings=settings).returning(SourceRow).execution_options(populate_existing=True)
+        ).one()
+        return _source(row)

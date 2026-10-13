@@ -2,12 +2,14 @@
 SCRAPER_DATABASE_URL setting the rest of the app uses."""
 
 from alembic import context
+from sqlalchemy import text
 
 from scraper.config import load
 from scraper.pipeline.db import engine_url, make_engine
 from scraper.pipeline.migrate import CONTEXT_OPTIONS, ensure_schema
 
 config = context.config
+MIGRATION_LOCK = 7_302_210_001  # any constant: "the pipeline's migrations are running"
 
 
 def _url() -> str:
@@ -31,12 +33,20 @@ def run_migrations_online() -> None:
         engine = make_engine(_url(), pool_size=1)
     try:
         with engine.connect() as connection:
-            ensure_schema(connection)
-            connection.commit()
-            context.configure(connection=connection, **CONTEXT_OPTIONS)
-            with context.begin_transaction():
-                context.run_migrations()
-            connection.commit()
+            # The API and the worker both migrate when they start, and on a fresh volume they start together. One at a time: the
+            # second waits, then finds nothing left to do. A session lock, released below because a pooled connection outlives this.
+            connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK})
+            try:
+                ensure_schema(connection)
+                connection.commit()
+                context.configure(connection=connection, **CONTEXT_OPTIONS)
+                with context.begin_transaction():
+                    context.run_migrations()
+                connection.commit()
+            finally:
+                connection.rollback()
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK})
+                connection.commit()
     finally:
         if owned:
             engine.dispose()

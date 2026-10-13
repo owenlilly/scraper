@@ -3,7 +3,7 @@
 #
 #   E2E_DATABASE_URL=postgresql://user@host/scraper_e2e_test npm run e2e:ui [-- playwright arguments]
 #
-# The database must be a scratch one: the script drops its `auth` and `app` schemas first. Nothing here contacts a real model.
+# The database must be a scratch one: the script drops its `auth`, `app` and `pipeline` schemas first. Nothing here contacts a real model.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/stack.sh

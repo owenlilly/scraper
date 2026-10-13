@@ -48,8 +48,18 @@ class RunRow(Base):
     worker_id: Mapped[str | None] = mapped_column(Text)
     stats: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     error: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, server_default="live")  # 'live' or 'trial'
+    retry_of: Mapped[int | None] = mapped_column(ForeignKey(f"{SCHEMA}.run.id"))
+    requested_by: Mapped[str | None] = mapped_column(Text)  # the admin's user id; null for the CLI
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    options: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 
-    __table_args__ = (Index("ix_run_source_id_id", "source_id", "id"),)
+    __table_args__ = (
+        Index("ix_run_source_id_id", "source_id", "id"),
+        # A source has at most one run in flight. The queue relies on this, so two clicks cannot start two crawls.
+        Index("uq_run_source_id_active", "source_id", unique=True, postgresql_where=text("status IN ('queued', 'running')")),
+    )
 
 
 class FetchRow(Base):
