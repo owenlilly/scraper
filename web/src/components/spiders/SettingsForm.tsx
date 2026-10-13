@@ -14,6 +14,7 @@ type Values = Record<string, unknown>;
 
 export function SettingsForm({ name }: { name: string }) {
   const query = useSettings(name);
+  const [toast, setToast] = useToast(); // here, not in the editor: the editor restarts after every save and would lose it
   if (query.isPending) {
     return (
       <p role="status" className="muted">
@@ -32,7 +33,12 @@ export function SettingsForm({ name }: { name: string }) {
     );
   }
   // Keyed by the saved values, so after a save the form starts again from what was saved.
-  return <Editor key={JSON.stringify(query.data.settings)} name={name} view={query.data} />;
+  return (
+    <>
+      <Editor key={JSON.stringify(query.data.settings)} name={name} view={query.data} onSaved={() => setToast("Settings saved")} />
+      <Toast message={toast} />
+    </>
+  );
 }
 
 function NumberInput({ field, value, onChange, id }: { field: FormField; value: unknown; onChange: (next: number | null) => void; id: string }) {
@@ -115,12 +121,11 @@ function RecordsEditor({ field, value, onChange, problem }: { field: FormField; 
   );
 }
 
-function Editor({ name, view }: { name: string; view: SettingsView }) {
+function Editor({ name, view, onSaved }: { name: string; view: SettingsView; onSaved: () => void }) {
   const [values, setValues] = useState<Values>(() => ({ ...view.settings }));
   const [rows, setRows] = useState<FieldRow[]>(() => rowsFromSettings(view.fields, asStrings(view.settings.visible_fields)));
   const [problem, setProblem] = useState<string | null>(null);
-  const [toast, setToast] = useToast();
-  const save = useSaveSettings(name, () => setToast("Settings saved"), setProblem);
+  const save = useSaveSettings(name, onSaved, setProblem);
 
   const next: Values = { ...values, visible_fields: visibleFromRows(rows, view.fields) };
   const dirty = isChanged(next, view.settings);
@@ -233,7 +238,6 @@ function Editor({ name, view }: { name: string; view: SettingsView }) {
           Back to {name}
         </Link>
       </div>
-      <Toast message={toast} />
     </form>
   );
 }

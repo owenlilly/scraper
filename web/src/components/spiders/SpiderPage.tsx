@@ -52,7 +52,7 @@ export function SpiderPage({ name }: { name: string }) {
           {places.length > 0 ? (
             <label>
               Location
-              <select value={locationId} onChange={(event) => setPlace(event.target.value)}>
+              <select aria-label="Location" value={locationId} onChange={(event) => setPlace(event.target.value)}>
                 {places.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
@@ -63,7 +63,7 @@ export function SpiderPage({ name }: { name: string }) {
           ) : null}
           <label>
             Trial pages
-            <select value={trialCap} onChange={(event) => setCap(Number(event.target.value))}>
+            <select aria-label="Trial pages" value={trialCap} onChange={(event) => setCap(Number(event.target.value))}>
               {capChoices(savedTrial).map((value) => (
                 <option key={value} value={value}>
                   {value}
