@@ -13,6 +13,7 @@ from .db import make_engine
 from .migrate import current_revision, upgrade
 from .repositories import SourceBusy
 from .runner import run_source
+from .settings import LocationProblem, SettingsInvalid
 from .sources import SPIDERS
 from .worker import Worker, exec_run
 
@@ -77,6 +78,12 @@ def main(argv: list[str] | None = None) -> int:
             finished = run_source(SPIDERS[args.source], engine, blobs)
         except SourceBusy:
             print("A run is already queued or running for this source.", file=sys.stderr)
+            return 2
+        except SettingsInvalid as error:
+            print(f"The saved settings are not valid ({error.message}). Fix them on the spider's Settings page.", file=sys.stderr)
+            return 2
+        except LocationProblem as error:
+            print(error.message, file=sys.stderr)
             return 2
     finally:
         engine.dispose()

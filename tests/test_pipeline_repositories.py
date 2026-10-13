@@ -128,3 +128,14 @@ def test_a_fetch_keeps_its_metadata_and_a_retrievable_body(uow):
         assert work.fetches.body(ref.id) == b"<p>hi</p>"
         with pytest.raises(KeyError):
             work.fetches.body(ref.id + 100)
+
+
+def test_set_settings_replaces_the_saved_settings_and_ensure_leaves_them_alone(uow):
+    with uow() as work:
+        source = work.sources.ensure("shop", {"delay": 1})
+        saved = work.sources.set_settings(source.id, {"concurrency": 2})
+    assert saved.settings == {"concurrency": 2}
+    with uow() as work:
+        assert work.sources.ensure("shop", {"delay": 99}).settings == {"concurrency": 2}  # a code default never overwrites what an admin saved
+        work.sources.set_settings(source.id, {})
+        assert work.sources.get("shop").settings == {}

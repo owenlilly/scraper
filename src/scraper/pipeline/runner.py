@@ -6,6 +6,7 @@ from sqlalchemy import Engine
 
 from .blobs import FilesystemBlobStore
 from .domain import Run
+from .settings import SettingsInvalid, load_settings, location_options, run_options
 from .spider import RunContext, SourceSpider
 from .uow import UnitOfWork
 
@@ -17,11 +18,24 @@ def run_source(
     worker_id: str = "cli", kind: str = "live", options: dict | None = None, beat_seconds: float = BEAT_SECONDS,
 ) -> Run:
     """Blocks until the crawl ends. The run row says how it ended: `completed`, `paused` (stopped; nothing is lost, the records so
-    far are saved) or `failed` (storage broke, or the crawl itself raised). Raises `SourceBusy` if the source already has a run in flight."""
+    far are saved) or `failed` (storage broke, or the crawl itself raised). Raises `SourceBusy` if the source already has a run in
+    flight, and `SettingsInvalid` or `LocationProblem` (before queuing anything) when the saved settings cannot start a run."""
     with UnitOfWork(engine, blobs) as uow:
         source = uow.sources.ensure(spider_cls.name)
+        options = _with_settings(spider_cls, source.settings, kind, options)
         run = uow.runs.start(uow.runs.enqueue(source.id, kind=kind, options=options).id, worker_id)
     return execute(spider_cls, engine, blobs, source.id, run, beat_seconds=beat_seconds)
+
+
+def _with_settings(spider_cls: type[SourceSpider], saved: dict, kind: str, options: dict | None) -> dict:
+    """The options a run needs. The API gives them all; the command line and the tests give none, so the saved settings (and, for a
+    spider with locations, its first location) are used."""
+    options = dict(options or {})
+    if "settings" in options:
+        return options
+    settings = load_settings(spider_cls, saved)
+    entries = location_options(spider_cls, settings)
+    return {**options, **run_options(spider_cls, settings, location_id=entries[0]["id"] if entries else None, kind=kind, max_requests=options.get("max_requests"))}
 
 
 def execute(
@@ -30,7 +44,12 @@ def execute(
     """Crawl for a run that is already `running`, reporting progress as it goes, and finish it. The command line and the worker's
     child process both come through here, so both heartbeat and both can be stopped from the page."""
     try:
-        spider = spider_cls(ctx=RunContext(engine, blobs, source_id, run.id, run.kind, run.options))
+        settings = load_settings(spider_cls, run.options.get("settings"))
+    except SettingsInvalid as error:
+        with UnitOfWork(engine, blobs) as uow:
+            return uow.runs.finish(run.id, "failed", {}, f"the settings for this run are not valid: {error.message}")
+    try:
+        spider = spider_cls(ctx=RunContext(engine, blobs, source_id, run.id, run.kind, run.options, settings, run.options.get("location")))
     except Exception as error:
         with UnitOfWork(engine, blobs) as uow:
             return uow.runs.finish(run.id, "failed", {}, f"could not start the spider: {error!r}")

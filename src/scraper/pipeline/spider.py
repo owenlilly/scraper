@@ -17,6 +17,7 @@ from sqlalchemy import Engine
 from .blobs import FilesystemBlobStore
 from .domain import RecordItem, UpsertResult
 from .items import prepare
+from .settings import SpiderSettings
 from .uow import UnitOfWork
 
 BATCH_SIZE = 50
@@ -40,6 +41,8 @@ class RunContext:
     run_id: int
     kind: str = "live"  # "trial" crawls a few pages and stores no records
     options: dict = field(default_factory=dict)
+    settings: SpiderSettings | None = None  # the run's validated snapshot; None means the spider's own defaults
+    location: dict | None = None  # the entry this run crawls, for a spider that has locations
 
 
 def _clipped(value):
@@ -64,9 +67,19 @@ class SourceSpider(Spider):
     robots_txt_obey = True
     autothrottle_enabled = True
 
+    # What an administrator can change. A spider with settings of its own sets `settings_model` to a subclass of SpiderSettings; one
+    # with places to crawl also names the list that holds them and which two fields of an entry are its id and its label.
+    settings_model: type[SpiderSettings] = SpiderSettings
+    locations_setting: str | None = None
+    location_id_field: str = ""
+    location_label_field: str = ""
+
     def __init__(self, *, ctx: RunContext, crawldir=None, interval: float = 300.0) -> None:
-        super().__init__(crawldir=crawldir, interval=interval)
+        # Settings first: Scrapling calls `configure_sessions` from inside its own __init__, before this one would store anything.
         self.ctx = ctx
+        self.settings = ctx.settings if ctx.settings is not None else self.settings_model()
+        self.location = ctx.location
+        super().__init__(crawldir=crawldir, interval=interval)
         self._buffer: list[RecordItem] = []
         self._written = UpsertResult()
         self._rejected = 0
@@ -75,11 +88,17 @@ class SourceSpider(Spider):
         self._rejected_samples: list[dict] = []
         self.write_error: str | None = None
         self.trial = ctx.kind == "trial"
-        self.trial_requests = int(ctx.options.get("max_requests", TRIAL_DEFAULT_REQUESTS))
+        if self.settings.concurrency is not None:
+            self.concurrent_requests = self.settings.concurrency
+        if self.settings.request_delay is not None:
+            self.download_delay = self.settings.request_delay
         if self.trial:
+            self.request_cap: int | None = int(ctx.options.get("max_requests", TRIAL_DEFAULT_REQUESTS))
             # The cap is checked as each response arrives, by which time Scrapling has started as many requests as it may run at
-            # once. One at a time makes the cap mean what the page says it means, on a live site.
+            # once. One at a time makes a trial's cap mean what the page says it means, on a live site.
             self.concurrent_requests = 1
+        else:
+            self.request_cap = self.settings.max_requests  # approximate when several requests run at once
         self.stopped_at_cap = False
         self.pause_was_requested = False
         self._trial_items: list[dict] = []
@@ -98,15 +117,15 @@ class SourceSpider(Spider):
             self._fail(f"archiving {response.url}: {error!r}")
             return False
         _current_fetch.set(fetch_id)
-        self._stop_at_trial_cap()
+        self._stop_at_request_cap()
         return await self.looks_blocked(response)
 
     async def looks_blocked(self, response) -> bool:
         """Override for a site that answers 200 with a challenge page. The default is Scrapling's: a status in its blocked set."""
         return await super().is_blocked(response)
 
-    def _stop_at_trial_cap(self) -> None:
-        if self.trial and not self.stopped_at_cap and self.stats.requests_count >= self.trial_requests:
+    def _stop_at_request_cap(self) -> None:
+        if self.request_cap is not None and not self.stopped_at_cap and self.stats.requests_count >= self.request_cap:
             self.stopped_at_cap = True
             self.stop_once()
 
@@ -230,5 +249,6 @@ class SourceSpider(Spider):
         }
         if self.trial:
             stats["trial_items"] = list(self._trial_items)
+        if self.request_cap is not None:
             stats["stopped_at_cap"] = self.stopped_at_cap
         return stats
