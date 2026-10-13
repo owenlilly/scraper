@@ -7,7 +7,7 @@ const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString
 
 const run = (fields: Partial<Run> = {}): Run => ({
   id: 7, source: "books_toscrape", kind: "live", status: "running", queued_at: at(120), started_at: at(100), finished_at: null, heartbeat_at: at(1),
-  retry_of: null, cancel_requested: false, options: {}, stats: {}, error: null, ...fields,
+  retry_of: null, cancel_requested: false, options: {}, stats: {}, error: null, location: null, ...fields,
 });
 
 describe("status", () => {
@@ -68,8 +68,10 @@ describe("counters", () => {
       { label: "Requests", value: 5 }, { label: "Parsed", value: 98 }, { label: "Rejected", value: 2 }, { label: "Blocked", value: 0 },
     ]);
   });
-  it("explains how a trial ended", () => {
-    expect(endNote(run({ kind: "trial", status: "completed", options: { max_requests: 5 }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the page cap (5 requests).");
+  it("explains how a run ended at its request cap, whichever kind it was", () => {
+    expect(endNote(run({ kind: "trial", status: "completed", options: { max_requests: 5 }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap (5 requests).");
+    expect(endNote(run({ status: "completed", options: { settings: { max_requests: 40 } }, stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap (40 requests).");
+    expect(endNote(run({ status: "completed", stats: { stopped_at_cap: true } }))).toBe("Stopped at the request cap.");
     expect(endNote(run({ status: "completed" }))).toBeNull();
   });
 });
@@ -92,8 +94,8 @@ describe("polling", () => {
     expect(pollRunsEvery([run({ status: "completed" }), run({ id: 6, status: "failed" })])).toBe(false);
     expect(pollRunsEvery([])).toBe(false);
     expect(pollRunsEvery(undefined)).toBe(false);
-    expect(pollSourcesEvery([{ name: "a", latest_run: null }, { name: "b", latest_run: run({ status: "queued" }) }])).toBe(POLL_LIST_MS);
-    expect(pollSourcesEvery([{ name: "a", latest_run: null }, { name: "b", latest_run: run({ status: "paused" }) }])).toBe(false);
+    expect(pollSourcesEvery([{ name: "a", latest_run: null, locations: [], trial_max_requests: 5 }, { name: "b", latest_run: run({ status: "queued" }), locations: [], trial_max_requests: 5 }])).toBe(POLL_LIST_MS);
+    expect(pollSourcesEvery([{ name: "a", latest_run: null, locations: [], trial_max_requests: 5 }, { name: "b", latest_run: run({ status: "paused" }), locations: [], trial_max_requests: 5 }])).toBe(false);
     expect(pollSourcesEvery(undefined)).toBe(false);
     expect(POLL_LIST_MS).toBe(6000);
   });

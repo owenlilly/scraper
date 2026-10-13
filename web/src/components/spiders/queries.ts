@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { ApiError } from "../../lib/api/client";
 import { pollFeedEvery, pollRunEvery, pollRunsEvery, pollSourcesEvery } from "../../lib/spiders/derive";
-import type { FetchRow, Run, SourceSummary } from "../../lib/spiders/types";
+import type { FetchRow, Run, SettingsView, SourceSummary } from "../../lib/spiders/types";
 import { useApi } from "../workspace/ApiProvider";
 
 const FETCH_PAGE = 200; // the API's page size: a full page means there may be more
@@ -14,6 +14,7 @@ const keys = {
   runs: (name: string) => ["pipeline", "runs", name] as const,
   run: (id: number | null) => ["pipeline", "run", id] as const,
   fetches: (id: number | null) => ["pipeline", "fetches", id] as const,
+  settings: (name: string) => ["pipeline", "settings", name] as const,
 };
 
 export const messageOf = (error: unknown): string => (error instanceof ApiError ? error.message : "Something went wrong. Try again.");
@@ -75,6 +76,30 @@ export function useFetchFeed(runId: number | null, active: boolean) {
   return query;
 }
 
+/** One spider's saved settings, with the description of its form. Not polled: it changes only when someone saves. */
+export function useSettings(name: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.settings(name),
+    queryFn: () => api.get<SettingsView>(`/pipeline/sources/${encodeURIComponent(name)}/settings`),
+  });
+}
+
+/** Save the whole settings object. On success the saved view replaces the cached one and the lists refresh (the location picker reads them). */
+export function useSaveSettings(name: string, onSaved: () => void, onError: (message: string) => void) {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: Record<string, unknown>) => api.put<SettingsView>(`/pipeline/sources/${encodeURIComponent(name)}/settings`, settings),
+    onSuccess: (view) => {
+      client.setQueryData(keys.settings(name), view);
+      void client.invalidateQueries({ queryKey: ["pipeline", "sources"] });
+      onSaved();
+    },
+    onError: (error) => onError(messageOf(error)),
+  });
+}
+
 /** Start, stop and retry. Each refreshes the lists, and `onError` gets the API's own sentence (for a toast). */
 export function useRunActions(onError: (message: string) => void, onStarted?: (run: Run) => void) {
   const api = useApi();
@@ -82,8 +107,12 @@ export function useRunActions(onError: (message: string) => void, onStarted?: (r
   const refresh = () => client.invalidateQueries({ queryKey: ["pipeline"] });
   const settle = { onSuccess: refresh, onError: (error: unknown) => onError(messageOf(error)) };
   const start = useMutation({
-    mutationFn: ({ name, kind, maxRequests }: { name: string; kind: "live" | "trial"; maxRequests?: number }) =>
-      api.post<Run>(`/pipeline/sources/${encodeURIComponent(name)}/runs`, { kind, ...(kind === "trial" && maxRequests ? { max_requests: maxRequests } : {}) }),
+    mutationFn: ({ name, kind, maxRequests, location }: { name: string; kind: "live" | "trial"; maxRequests?: number; location?: string }) =>
+      api.post<Run>(`/pipeline/sources/${encodeURIComponent(name)}/runs`, {
+        kind,
+        ...(kind === "trial" && maxRequests ? { max_requests: maxRequests } : {}),
+        ...(location ? { location } : {}),
+      }),
     onSuccess: (run) => {
       void refresh();
       onStarted?.(run);

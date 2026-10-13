@@ -82,11 +82,10 @@ export function counters(run: Run): Counter[] {
 }
 
 export function endNote(run: Run): string | null {
-  if (run.kind === "trial" && run.stats.stopped_at_cap) {
-    const cap = run.options.max_requests;
-    return cap ? `Stopped at the page cap (${cap} requests).` : "Stopped at the page cap.";
-  }
-  return null;
+  if (!run.stats.stopped_at_cap) return null;
+  const saved = run.options.settings?.max_requests;
+  const cap = run.kind === "trial" ? run.options.max_requests : typeof saved === "number" ? saved : undefined;
+  return cap ? `Stopped at the request cap (${cap} requests).` : "Stopped at the request cap.";
 }
 
 export function statusTone(status: number): "ok" | "muted" | "bad" {

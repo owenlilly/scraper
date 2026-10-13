@@ -21,6 +21,18 @@ export type RunStats = {
   stopped_at_cap?: boolean;
 };
 
+/** A place a run can crawl, as the person sees it: the id a run is started with and the name shown for it. */
+export type LocationOption = { id: string; label: string };
+
+export type RunOptions = {
+  /** A trial's request count. */
+  max_requests?: number;
+  /** The whole entry the run crawled, with every one of its bound values. */
+  location?: Record<string, unknown>;
+  /** The settings the run was queued with. */
+  settings?: Record<string, unknown>;
+};
+
 export type Run = {
   id: number;
   source: string;
@@ -32,11 +44,42 @@ export type Run = {
   heartbeat_at: string | null;
   retry_of: number | null;
   cancel_requested: boolean;
-  options: { max_requests?: number };
+  options: RunOptions;
   stats: RunStats;
   error: string | null;
+  location: LocationOption | null;
 };
 
-export type SourceSummary = { name: string; latest_run: Run | null };
+export type SourceSummary = { name: string; latest_run: Run | null; locations: LocationOption[]; trial_max_requests: number };
 
 export type FetchRow = { id: number; url: string; final_url: string; status: number; fetched_at: string; duration_ms: number | null; size: number };
+
+/** How the API describes one of a spider's own settings, so the form can be drawn without knowing the spider. */
+export type FormField = {
+  key: string;
+  label: string;
+  description: string | null;
+  type: "integer" | "number" | "string" | "boolean" | "array";
+  nullable: boolean;
+  default: unknown;
+  minimum: number | null;
+  maximum: number | null;
+  minLength: number | null;
+  maxLength: number | null;
+  maxItems: number | null;
+  /** For a list: the fields of each record. */
+  items?: FormField[];
+};
+
+export type SettingsView = {
+  /** The saved values with defaults filled in, or the stored values as they are when they no longer validate (see `problems`). */
+  settings: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  problems: string[];
+  form: FormField[];
+  /** The names of the spider's item fields, in the item's own order. */
+  fields: string[];
+  locations_setting: string | null;
+  location_id_field: string;
+  location_label_field: string;
+};
